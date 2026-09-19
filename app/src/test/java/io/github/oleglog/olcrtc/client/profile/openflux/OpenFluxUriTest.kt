@@ -66,7 +66,7 @@ class OpenFluxUriTest {
             documentUrl = "https://disk.yandex.ru/i/JsCiJYtJjOP-Aw",
             transport = OpenFluxProfile.Transport.YANDEX,
             dnsServer = "8.8.8.8:53",
-            encryptionKey = "0123456789abcdef0123456789abcdef",
+            encryptionKey = "test-sample-encryption-key", // gitleaks:allow
         )
         val uri = OpenFluxUri.serialize(original)
         val parsed = OpenFluxUri.parse(uri)
