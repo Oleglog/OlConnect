@@ -52,10 +52,11 @@ jobs:
             native/hev-socks5-tunnel/upstream
           key: hev-${{ runner.os }}-ndk-28.2.13676358-${{ hashFiles('scripts/build_hev.sh', 'app/src/main/jni/**') }}
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install Android SDK components
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+        run: |
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/tools/bin:${PATH}"
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
 
       - name: Prepare release signing
         shell: bash
