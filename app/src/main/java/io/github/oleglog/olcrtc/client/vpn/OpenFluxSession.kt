@@ -45,6 +45,11 @@ internal class OpenFluxSession(
     }
 
     fun start() {
+        if (!profile.encryptionKey.isNullOrBlank()) {
+            Mobilecore.setOpenFluxEncryptionKey(profile.encryptionKey)
+        } else {
+            Mobilecore.setOpenFluxEncryptionKey("")
+        }
         val error = Mobilecore.startOpenFlux(profile.documentUrl, profile.transport.value)
         if (!error.isNullOrEmpty()) {
             throw IllegalStateException(error)
@@ -94,6 +99,16 @@ internal class OpenFluxSession(
                     val sendErr = Mobilecore.sendOpenFlux(packet)
                     if (sendErr.isNullOrEmpty()) {
                         bytesUp.addAndGet(packet.size.toLong())
+                    }
+                } else if (isIpv4Udp(packet)) {
+                    workers.execute {
+                        val out = synchronized(outputLock) { tunnelOutput }
+                        if (out != null && !closed.get()) {
+                            val icmp = buildIcmpPortUnreachable(packet)
+                            if (icmp.isNotEmpty()) {
+                                inject(out, icmp)
+                            }
+                        }
                     }
                 }
             }
@@ -192,10 +207,37 @@ internal class OpenFluxSession(
         private fun isIpv4Tcp(packet: ByteArray): Boolean =
             packet.size >= 20 && (packet[0].toInt() ushr 4) == 4 && (packet[9].toInt() and 0xff) == 6
 
+        private fun isIpv4Udp(packet: ByteArray): Boolean =
+            packet.size >= 28 && (packet[0].toInt() ushr 4) == 4 && (packet[9].toInt() and 0xff) == 17
+
         private fun isIpv4UdpDns(packet: ByteArray): Boolean {
-            if (packet.size < 28 || (packet[0].toInt() ushr 4) != 4 || (packet[9].toInt() and 0xff) != 17) return false
+            if (!isIpv4Udp(packet)) return false
             val header = (packet[0].toInt() and 0x0f) * 4
             return header >= 20 && packet.size >= header + 8 && unsignedShort(packet, header + 2) == 53
+        }
+
+        internal fun buildIcmpPortUnreachable(orig: ByteArray): ByteArray {
+            val ihl = (orig[0].toInt() and 0x0f) * 4
+            if (orig.size < ihl + 8) return ByteArray(0)
+            val quoteLen = ihl + 8
+            val icmpLen = 8 + quoteLen
+            val icmp = ByteArray(icmpLen)
+            icmp[0] = 3 // Destination Unreachable
+            icmp[1] = 3 // Port Unreachable
+            System.arraycopy(orig, 0, icmp, 8, quoteLen)
+            putShort(icmp, 2, checksum(icmp, 0, icmpLen))
+
+            val total = 20 + icmpLen
+            val ip = ByteArray(total)
+            ip[0] = 0x45
+            putShort(ip, 2, total)
+            ip[8] = 64 // TTL
+            ip[9] = 1  // ICMP
+            System.arraycopy(orig, 16, ip, 12, 4) // src = original dst
+            System.arraycopy(orig, 12, ip, 16, 4) // dst = original src
+            putShort(ip, 10, checksum(ip, 0, 20))
+            System.arraycopy(icmp, 0, ip, 20, icmpLen)
+            return ip
         }
 
         private fun buildDnsResponse(request: ByteArray, dns: ByteArray): ByteArray {

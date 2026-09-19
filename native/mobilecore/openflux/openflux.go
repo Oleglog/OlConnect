@@ -6,7 +6,18 @@ import (
 	"sync"
 )
 
-var client = packetClient{}
+var (
+	client        = packetClient{}
+	encKeyMu      sync.Mutex
+	encryptionKey string
+)
+
+// SetEncryptionKey configures an optional AES-256-GCM transport key.
+func SetEncryptionKey(key string) {
+	encKeyMu.Lock()
+	defer encKeyMu.Unlock()
+	encryptionKey = strings.TrimSpace(key)
+}
 
 type packetClient struct {
 	mu        sync.Mutex
@@ -56,6 +67,22 @@ func Start(documentURL string, transportType string) string {
 	} else {
 		appendLog("[ANDROID] Запуск классического транспорта yandex")
 		innerTrans = NewYandexDocsTransport(documentURL, config)
+	}
+
+	encKeyMu.Lock()
+	key := encryptionKey
+	encKeyMu.Unlock()
+	if key != "" {
+		appendLog("[ANDROID] Включение сквозного шифрования AES-256-GCM")
+		encTrans, err := NewEncryptedTransport(innerTrans, key, documentURL, false)
+		if err != nil {
+			appendLog(fmt.Sprintf("[ANDROID] Ошибка настройки шифрования: %v", err))
+			client.mu.Lock()
+			client.running = false
+			client.mu.Unlock()
+			return err.Error()
+		}
+		innerTrans = encTrans
 	}
 
 	trans := newCompressedTransport(innerTrans)

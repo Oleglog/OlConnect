@@ -405,6 +405,10 @@ func StartOpenFlux(docURL string, transportType string) string {
 	return openflux.Start(docURL, transportType)
 }
 
+func SetOpenFluxEncryptionKey(key string) {
+	openflux.SetEncryptionKey(key)
+}
+
 func StopOpenFlux() {
 	openflux.Stop()
 }

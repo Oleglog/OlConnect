@@ -1,4 +1,4 @@
-﻿package openflux
+package openflux
 
 import (
 	"encoding/base64"
@@ -199,6 +199,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			if err != nil {
 				Debugf("[YDOCS] Read error: %v", err)
 				t.SetConnected(false)
+				conn.Close()
 				// If the session was healthy for a while, treat the next
 				// connect as fresh (attempt -1 -> next attempt 0) so backoff
 				// doesn't keep growing across normal long-lived reconnects.
@@ -215,27 +216,47 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 }
 
 func (t *YandexDocsTransport) writerLoop() {
-	for t.IsRunning() {
+	var queue chan []byte
+	for t.IsRunning() && queue == nil {
 		t.Mu.Lock()
-		session := t.session
+		if t.session != nil {
+			queue = t.session.WriteQueue
+		}
 		t.Mu.Unlock()
+		if queue == nil {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if queue == nil {
+		return
+	}
 
+	var pending []byte
+	for t.IsRunning() {
+		if pending == nil {
+			packet, ok := <-queue
+			if !ok {
+				return
+			}
+			pending = packet
+		}
+
+		t.Mu.RLock()
+		session := t.session
+		t.Mu.RUnlock()
 		if session == nil || session.Conn == nil {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(15 * time.Millisecond)
 			continue
 		}
 
-		select {
-		case packet := <-session.WriteQueue:
-			payload := base64.StdEncoding.EncodeToString(packet)
-			msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
-
-			if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
-				Debugf("[YDOCS] Write error: %v", err)
-			}
-		default:
-			time.Sleep(10 * time.Millisecond)
+		payload := base64.StdEncoding.EncodeToString(pending)
+		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
+		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
+			Debugf("[YDOCS] Write error: %v", err)
+			time.Sleep(15 * time.Millisecond)
+			continue
 		}
+		pending = nil
 	}
 }
 

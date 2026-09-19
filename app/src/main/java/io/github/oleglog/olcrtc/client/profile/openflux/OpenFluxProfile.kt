@@ -7,6 +7,7 @@ data class OpenFluxProfile(
     val documentUrl: String,
     val transport: Transport = Transport.AUTO,
     val dnsServer: String? = null,
+    val encryptionKey: String? = null,
 ) {
     init {
         require(name.isNotBlank()) { "name is required" }
@@ -20,7 +21,8 @@ data class OpenFluxProfile(
     enum class Transport(val value: String) {
         AUTO("auto"),
         VYANDEX("vyandex"),
-        YANDEX("yandex");
+        YANDEX("yandex"),
+        MAILRU("mailru");
 
         companion object {
             fun parse(value: String): Transport = entries.firstOrNull { it.value == value.trim().lowercase() }
