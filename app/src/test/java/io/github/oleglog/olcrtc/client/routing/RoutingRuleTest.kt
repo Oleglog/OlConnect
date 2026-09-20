@@ -27,6 +27,14 @@ class RoutingRuleTest {
             "2001:db8:0:0:0:0:0:0/32",
             rule(RoutingRule.MatchType.CIDR, "2001:db8::1/32").value,
         )
+        assertEquals(
+            "com.google.android.youtube",
+            rule(RoutingRule.MatchType.PACKAGE, "  com.google.android.youtube  ").value,
+        )
+        assertEquals(
+            "org.telegram.messenger",
+            rule(RoutingRule.MatchType.PACKAGE, "Org.Telegram.Messenger").value,
+        )
     }
 
     @Test
@@ -38,6 +46,9 @@ class RoutingRuleTest {
             RoutingRule.MatchType.CIDR to "192.0.2.1/33",
             RoutingRule.MatchType.CIDR to "2001:db8::1/129",
             RoutingRule.MatchType.IP to "fe80::1%1",
+            RoutingRule.MatchType.PACKAGE to "invalid",
+            RoutingRule.MatchType.PACKAGE to "com..bad",
+            RoutingRule.MatchType.PACKAGE to "com.bad-name.app",
         ).forEach { (type, value) ->
             assertThrows(IllegalArgumentException::class.java) { rule(type, value) }
         }

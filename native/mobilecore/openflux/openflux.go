@@ -61,10 +61,14 @@ func Start(documentURL string, transportType string) string {
 	}
 
 	var innerTrans Transport
-	if detected == "vyandex" {
+	switch detected {
+	case "mailru":
+		appendLog("[ANDROID] Запуск транспорта Mail.ru Docs")
+		innerTrans = NewMailruDocsTransport(documentURL, config)
+	case "vyandex":
 		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
 		innerTrans = NewYandexVolgaTransport(documentURL, config)
-	} else {
+	default:
 		appendLog("[ANDROID] Запуск классического транспорта yandex")
 		innerTrans = NewYandexDocsTransport(documentURL, config)
 	}

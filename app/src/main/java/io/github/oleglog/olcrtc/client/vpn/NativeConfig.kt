@@ -111,13 +111,16 @@ internal object NativeConfig {
                     RoutingRule.MatchType.DOMAIN -> "domain" to "full:${escapeJson(rule.value)}"
                     RoutingRule.MatchType.DOMAIN_SUFFIX -> "domain" to "domain:${escapeJson(rule.value)}"
                     RoutingRule.MatchType.IP, RoutingRule.MatchType.CIDR -> "ip" to escapeJson(rule.value)
+                    RoutingRule.MatchType.PACKAGE -> null
                 }
-                val outboundTag = when (rule.action) {
-                    RoutingRule.Action.DIRECT -> "direct"
-                    RoutingRule.Action.VPN -> "proxy"
-                    RoutingRule.Action.BLOCK -> "block"
+                if (field != null) {
+                    val outboundTag = when (rule.action) {
+                        RoutingRule.Action.DIRECT -> "direct"
+                        RoutingRule.Action.VPN -> "proxy"
+                        RoutingRule.Action.BLOCK -> "block"
+                    }
+                    add(fieldRule(field.first, field.second, outboundTag))
                 }
-                add(fieldRule(field.first, field.second, outboundTag))
             }
             if (policy.allowLan) {
                 add(fieldRule("ip", LAN_RANGES.joinToString(",") { "\"$it\"" }, "direct", rawValue = true))

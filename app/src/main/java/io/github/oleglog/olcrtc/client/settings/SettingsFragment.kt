@@ -632,6 +632,7 @@ class SettingsFragment : Fragment() {
         RoutingRule.MatchType.DOMAIN_SUFFIX -> R.string.settings_rule_type_domain_suffix
         RoutingRule.MatchType.IP -> R.string.settings_rule_type_ip
         RoutingRule.MatchType.CIDR -> R.string.settings_rule_type_cidr
+        RoutingRule.MatchType.PACKAGE -> R.string.settings_rule_type_package
     })
 
     private fun openSystemSettings(action: String) {

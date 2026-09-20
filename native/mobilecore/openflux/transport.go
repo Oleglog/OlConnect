@@ -11,6 +11,10 @@ import (
 )
 
 func detectTransport(docURL string) string {
+	if strings.Contains(docURL, "mail.ru") {
+		return "mailru"
+	}
+
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", docURL, nil)
 	if err != nil {

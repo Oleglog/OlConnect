@@ -569,6 +569,7 @@ internal class RoutingRuleRepository(
 
     private val RoutingRule.specificity: Int
         get() = when (matchType) {
+            RoutingRule.MatchType.PACKAGE -> 2_000
             RoutingRule.MatchType.IP -> 1_000
             RoutingRule.MatchType.CIDR -> 500 + value.substringAfter('/').toInt()
             RoutingRule.MatchType.DOMAIN -> 400 + value.length

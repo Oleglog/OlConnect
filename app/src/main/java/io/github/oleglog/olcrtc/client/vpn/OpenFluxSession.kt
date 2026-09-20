@@ -20,7 +20,9 @@ internal class OpenFluxSession(
     private val profile: OpenFluxProfile,
     private val dnsServer: String,
     private val establishTun: () -> ParcelFileDescriptor,
+    private val isPacketAllowed: ((packet: ByteArray) -> Boolean)? = null,
     private val onFail: (String) -> Unit = {},
+    private val onLog: (String) -> Unit = {},
 ) : VpnTunnelSession {
 
     private val closed = AtomicBoolean(false)
@@ -55,7 +57,7 @@ internal class OpenFluxSession(
             throw IllegalStateException(error)
         }
 
-        // Wait up to 30s for Volga/Yandex transport connection
+        // Wait up to 30s for transport connection
         var connected = false
         for (attempt in 0 until 120) {
             if (closed.get()) return
@@ -63,11 +65,17 @@ internal class OpenFluxSession(
                 connected = true
                 break
             }
+            val logs = Mobilecore.readOpenFluxLogs()
+            if (!logs.isNullOrBlank()) {
+                onLog(logs)
+            }
             Thread.sleep(250)
         }
         if (!connected) {
+            val logs = Mobilecore.readOpenFluxLogs()
             Mobilecore.stopOpenFlux()
-            throw IllegalStateException("Yandex-транспорт не подключился за 30 секунд")
+            val reason = if (!logs.isNullOrBlank()) ": $logs" else ""
+            throw IllegalStateException("Транспорт OpenFlux не подключился за 30 секунд$reason")
         }
 
         val pfd = establishTun()
@@ -88,6 +96,29 @@ internal class OpenFluxSession(
                 val length = input.read(buffer)
                 if (length <= 0) continue
                 val packet = Arrays.copyOf(buffer, length)
+
+                // Enforce per-app and routing policy at packet boundary:
+                // Drop and reset packets from unallowed apps trying to bypass routing via SO_BINDTODEVICE tun0
+                if (isPacketAllowed != null && !isPacketAllowed.invoke(packet)) {
+                    workers.execute {
+                        val out = synchronized(outputLock) { tunnelOutput }
+                        if (out != null && !closed.get()) {
+                            if (isIpv4Tcp(packet)) {
+                                val rst = buildTcpRst(packet)
+                                if (rst.isNotEmpty()) {
+                                    inject(out, rst)
+                                }
+                            } else if (isIpv4Udp(packet)) {
+                                val icmp = buildIcmpPortUnreachable(packet)
+                                if (icmp.isNotEmpty()) {
+                                    inject(out, icmp)
+                                }
+                            }
+                        }
+                    }
+                    continue
+                }
+
                 if (isIpv4UdpDns(packet)) {
                     workers.execute {
                         val out = synchronized(outputLock) { tunnelOutput }
@@ -216,6 +247,53 @@ internal class OpenFluxSession(
             return header >= 20 && packet.size >= header + 8 && unsignedShort(packet, header + 2) == 53
         }
 
+        internal fun buildTcpRst(orig: ByteArray): ByteArray {
+            val ihl = (orig[0].toInt() and 0x0f) * 4
+            if (orig.size < ihl + 20) return ByteArray(0)
+            val tcpOffset = ihl
+
+            val srcPort = unsignedShort(orig, tcpOffset)
+            val dstPort = unsignedShort(orig, tcpOffset + 2)
+            val origSeq = unsignedInt(orig, tcpOffset + 4)
+            val origAck = unsignedInt(orig, tcpOffset + 8)
+            val flags = orig[tcpOffset + 13].toInt() and 0xff
+            val isSyn = (flags and 0x02) != 0
+            val isAck = (flags and 0x10) != 0
+            val isRst = (flags and 0x04) != 0
+            if (isRst) return ByteArray(0)
+
+            val payloadLen = orig.size - (ihl + ((orig[tcpOffset + 12].toInt() ushr 4) * 4))
+            val segLen = (if (isSyn) 1L else 0L) + payloadLen.coerceAtLeast(0)
+
+            val total = 40
+            val rst = ByteArray(total)
+            rst[0] = 0x45
+            putShort(rst, 2, total)
+            putShort(rst, 4, 0)
+            putShort(rst, 6, 0x4000)
+            rst[8] = 64
+            rst[9] = 6
+            System.arraycopy(orig, 16, rst, 12, 4)
+            System.arraycopy(orig, 12, rst, 16, 4)
+            putShort(rst, 10, checksum(rst, 0, 20))
+
+            putShort(rst, 20, dstPort)
+            putShort(rst, 22, srcPort)
+            if (isAck) {
+                putInt(rst, 24, origAck)
+                putInt(rst, 28, 0)
+                rst[33] = 0x04.toByte()
+            } else {
+                putInt(rst, 24, 0)
+                putInt(rst, 28, (origSeq + segLen) and 0xffffffffL)
+                rst[33] = 0x14.toByte()
+            }
+            rst[32] = 0x50.toByte()
+            putShort(rst, 34, 0)
+            putShort(rst, 36, tcpChecksum(rst, 20, 20, 12, 16, rst))
+            return rst
+        }
+
         internal fun buildIcmpPortUnreachable(orig: ByteArray): ByteArray {
             val ihl = (orig[0].toInt() and 0x0f) * 4
             if (orig.size < ihl + 8) return ByteArray(0)
@@ -281,6 +359,46 @@ internal class OpenFluxSession(
         private fun putShort(bytes: ByteArray, offset: Int, value: Int) {
             bytes[offset] = (value ushr 8).toByte()
             bytes[offset + 1] = value.toByte()
+        }
+
+        private fun unsignedInt(bytes: ByteArray, offset: Int): Long =
+            ((bytes[offset].toLong() and 0xff) shl 24) or
+            ((bytes[offset + 1].toLong() and 0xff) shl 16) or
+            ((bytes[offset + 2].toLong() and 0xff) shl 8) or
+            (bytes[offset + 3].toLong() and 0xff)
+
+        private fun putInt(bytes: ByteArray, offset: Int, value: Long) {
+            bytes[offset] = ((value ushr 24) and 0xff).toByte()
+            bytes[offset + 1] = ((value ushr 16) and 0xff).toByte()
+            bytes[offset + 2] = ((value ushr 8) and 0xff).toByte()
+            bytes[offset + 3] = (value and 0xff).toByte()
+        }
+
+        private fun tcpChecksum(
+            packet: ByteArray,
+            tcpOffset: Int,
+            tcpLen: Int,
+            srcIpOffset: Int,
+            dstIpOffset: Int,
+            ipPacket: ByteArray,
+        ): Int {
+            var sum = 0L
+            for (i in 0 until 4 step 2) {
+                sum += ((ipPacket[srcIpOffset + i].toInt() and 0xff) shl 8) or (ipPacket[srcIpOffset + i + 1].toInt() and 0xff)
+                sum += ((ipPacket[dstIpOffset + i].toInt() and 0xff) shl 8) or (ipPacket[dstIpOffset + i + 1].toInt() and 0xff)
+            }
+            sum += 6L
+            sum += tcpLen.toLong()
+            var i = tcpOffset
+            while (i < tcpOffset + tcpLen) {
+                val high = packet[i].toInt() and 0xff
+                val low = if (i + 1 < tcpOffset + tcpLen) packet[i + 1].toInt() and 0xff else 0
+                sum += (high shl 8) or low
+                while ((sum and -0x10000) != 0L) sum = (sum and 0xffff) + (sum ushr 16)
+                i += 2
+            }
+            while ((sum and -0x10000) != 0L) sum = (sum and 0xffff) + (sum ushr 16)
+            return (sum.inv().toInt()) and 0xffff
         }
     }
 }

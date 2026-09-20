@@ -35,6 +35,7 @@ import io.github.oleglog.olcrtc.client.routing.DnsEndpoint
 import io.github.oleglog.olcrtc.client.routing.GeoAssetManager
 import io.github.oleglog.olcrtc.client.routing.PerAppPolicy
 import io.github.oleglog.olcrtc.client.routing.RoutingPolicy
+import io.github.oleglog.olcrtc.client.routing.RoutingRule
 import io.github.oleglog.olcrtc.client.routing.RoutingSettings
 import io.github.oleglog.olcrtc.client.statistics.ConnectionSessionRepository
 import io.github.oleglog.olcrtc.client.subscription.SubscriptionHttpClient
@@ -43,6 +44,7 @@ import io.github.oleglog.olcrtc.client.updater.GitHubUpdateClient
 import io.github.oleglog.olcrtc.client.updater.UpdateCheckWire
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -105,6 +107,7 @@ class OlcrtcVpnService : VpnService() {
     private var lastHealthProbeAt = 0L
     @Volatile private var activeNetwork: Network? = null
     private val socketRouteLogged = AtomicBoolean(false)
+    private val packetFilterCache = PacketFilterCache()
 
     private val userUnlockedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -309,6 +312,7 @@ class OlcrtcVpnService : VpnService() {
         activeDnsEndpoint = null
         runCatching { nativeSession?.close() }
         nativeSession = null
+        packetFilterCache.clear()
         connectionStartup.shutdownNow()
         healthChecks.shutdownNow()
         commands.shutdownNow()
@@ -930,7 +934,7 @@ class OlcrtcVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .addDnsServer(NativeConfig.VPN_DNS_ADDRESS)
         builder.setUnderlyingNetworks(arrayOf(network))
-        applyPerAppPolicy(builder, routingSettings.getPerAppPolicy())
+        applyPerAppPolicy(builder, routingSettings.getPerAppPolicy(), profiles.getEnabledRoutingRules())
         val descriptor = builder.establish()
             ?: error("failed to establish VPN interface")
         return object : TunDescriptor {
@@ -946,31 +950,66 @@ class OlcrtcVpnService : VpnService() {
             .addAddress("10.10.10.2", 24)
             .addRoute("0.0.0.0", 0)
             .addDnsServer(dnsServer)
-        // Exclude our own package so Go sockets bypass TUN and route directly to Internet
-        builder.addDisallowedApplication(packageName)
+        applyPerAppPolicy(builder, routingSettings.getPerAppPolicy(), profiles.getEnabledRoutingRules())
         return builder.establish()
             ?: error("failed to establish VPN interface for OpenFlux")
     }
 
-    private fun applyPerAppPolicy(builder: Builder, policy: PerAppPolicy) {
-        val packages = policy.packagesWithVpnAppExcluded(packageName)
+    private fun applyPerAppPolicy(
+        builder: Builder,
+        policy: PerAppPolicy,
+        packageRules: List<RoutingRule> = emptyList(),
+    ) {
+        val enabledPackageRules = packageRules.filter { it.matchType == RoutingRule.MatchType.PACKAGE && it.enabled }
         if (policy.mode == PerAppPolicy.Mode.ALL) {
             builder.addDisallowedApplication(packageName)
+            enabledPackageRules.forEach { rule ->
+                if (rule.action == RoutingRule.Action.DIRECT || rule.action == RoutingRule.Action.BLOCK) {
+                    try {
+                        builder.addDisallowedApplication(rule.value)
+                    } catch (_: PackageManager.NameNotFoundException) {
+                    }
+                }
+            }
             return
         }
 
+        val packages = policy.packagesWithVpnAppExcluded(packageName)
         var applied = 0
-        packages.sorted().forEach { packageName ->
+        packages.sorted().forEach { pkgName ->
             try {
                 when (policy.mode) {
-                    PerAppPolicy.Mode.EXCLUDE_SELECTED -> builder.addDisallowedApplication(packageName)
-                    PerAppPolicy.Mode.ONLY_SELECTED -> builder.addAllowedApplication(packageName)
+                    PerAppPolicy.Mode.EXCLUDE_SELECTED -> {
+                        builder.addDisallowedApplication(pkgName)
+                        applied++
+                    }
+                    PerAppPolicy.Mode.ONLY_SELECTED -> {
+                        val hasDirectOrBlockRule = enabledPackageRules.any {
+                            it.value.equals(pkgName, ignoreCase = true) &&
+                                (it.action == RoutingRule.Action.DIRECT || it.action == RoutingRule.Action.BLOCK)
+                        }
+                        if (!hasDirectOrBlockRule) {
+                            builder.addAllowedApplication(pkgName)
+                            applied++
+                        }
+                    }
                     PerAppPolicy.Mode.ALL -> Unit
                 }
-                applied++
             } catch (_: PackageManager.NameNotFoundException) {
             }
         }
+
+        if (policy.mode == PerAppPolicy.Mode.EXCLUDE_SELECTED) {
+            enabledPackageRules.forEach { rule ->
+                if (rule.action == RoutingRule.Action.DIRECT || rule.action == RoutingRule.Action.BLOCK) {
+                    try {
+                        builder.addDisallowedApplication(rule.value)
+                    } catch (_: PackageManager.NameNotFoundException) {
+                    }
+                }
+            }
+        }
+
         require(policy.mode != PerAppPolicy.Mode.ONLY_SELECTED || applied > 0) {
             "No selected applications are installed"
         }
@@ -990,15 +1029,20 @@ class OlcrtcVpnService : VpnService() {
             )
             val dnsEndpoint = sessionDns(profile, routingSettings.getDnsServer())
             val dnsIp = profile.value.dnsServer?.takeIf(String::isNotBlank) ?: "1.1.1.1"
+            packetFilterCache.clear()
             val session = OpenFluxSession(
                 profile = profile.value,
                 dnsServer = dnsIp,
                 establishTun = { establishOpenFluxTun(dnsIp) },
+                isPacketAllowed = { packet -> isPacketAllowedForPerApp(packet) },
                 onFail = { error ->
                     diagnostics.append("error", "OpenFlux error: $error")
                     commands.execute {
                         handleConnectionFailure(IllegalStateException(error))
                     }
+                },
+                onLog = { logMsg ->
+                    diagnostics.append("info", "OpenFlux: $logMsg")
                 },
             )
             attempt.session = session
@@ -1178,11 +1222,115 @@ class OlcrtcVpnService : VpnService() {
         healthProbeFailures = 0
         healthProbeInFlight = false
         healthProbeToken++
+        packetFilterCache.clear()
         val session = nativeSession
         nativeSession = null
         session?.close()
         if (session != null) {
             diagnostics.append("info", "VPN native session stopped in ${SystemClock.elapsedRealtime() - startedAt}ms")
+        }
+    }
+
+    private fun isPacketAllowedForPerApp(packet: ByteArray): Boolean {
+        if (packet.size < 20) return true
+        val version = packet[0].toInt() ushr 4
+        if (version != 4) return true
+        val ihl = (packet[0].toInt() and 0x0f) * 4
+        if (packet.size < ihl + 4) return true
+
+        val protocol = packet[9].toInt() and 0xff
+        if (protocol != 6 && protocol != 17) {
+            return true
+        }
+
+        val srcPort = ((packet[ihl].toInt() and 0xff) shl 8) or (packet[ihl + 1].toInt() and 0xff)
+        val dstPort = ((packet[ihl + 2].toInt() and 0xff) shl 8) or (packet[ihl + 3].toInt() and 0xff)
+
+        if (dstPort == 53) return true
+
+        val cacheKey = (protocol.toLong() shl 32) or (srcPort.toLong() shl 16) or (dstPort.toLong() and 0xffffL)
+        packetFilterCache.get(cacheKey)?.let { return it }
+
+        val allowed = checkPacketAllowed(protocol, packet, srcPort, dstPort)
+        packetFilterCache.put(cacheKey, allowed)
+        return allowed
+    }
+
+    private fun checkPacketAllowed(
+        protocol: Int,
+        packet: ByteArray,
+        srcPort: Int,
+        dstPort: Int,
+    ): Boolean {
+        val perAppPolicy = routingSettings.getPerAppPolicy()
+        val rules = profiles.getEnabledRoutingRules()
+        val packageRules = rules.filter { it.matchType == RoutingRule.MatchType.PACKAGE && it.enabled }
+
+        if (perAppPolicy.mode == PerAppPolicy.Mode.ALL && packageRules.isEmpty()) {
+            return true
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val srcIp = InetAddress.getByAddress(packet.copyOfRange(12, 16))
+                val dstIp = InetAddress.getByAddress(packet.copyOfRange(16, 20))
+                val localAddress = InetSocketAddress(srcIp, srcPort)
+                val remoteAddress = InetSocketAddress(dstIp, dstPort)
+
+                val ownerUid = connectivity.getConnectionOwnerUid(protocol, localAddress, remoteAddress)
+                if (ownerUid == android.os.Process.INVALID_UID || ownerUid <= 0) {
+                    return true
+                }
+
+                if (ownerUid == android.os.Process.myUid()) {
+                    return false
+                }
+
+                val packageNames = packageManager.getPackagesForUid(ownerUid)
+                if (packageNames.isNullOrEmpty()) {
+                    return true
+                }
+
+                for (pkg in packageNames) {
+                    val matchingRule = packageRules.firstOrNull { it.value.equals(pkg, ignoreCase = true) }
+                    if (matchingRule != null) {
+                        return when (matchingRule.action) {
+                            RoutingRule.Action.DIRECT, RoutingRule.Action.BLOCK -> false
+                            RoutingRule.Action.VPN -> true
+                        }
+                    }
+                }
+
+                return when (perAppPolicy.mode) {
+                    PerAppPolicy.Mode.ALL -> true
+                    PerAppPolicy.Mode.EXCLUDE_SELECTED -> !packageNames.any { perAppPolicy.packages.contains(it) }
+                    PerAppPolicy.Mode.ONLY_SELECTED -> packageNames.any { perAppPolicy.packages.contains(it) }
+                }
+            } catch (_: Throwable) {
+                return true
+            }
+        }
+        return true
+    }
+
+    private class PacketFilterCache {
+        private val cache = object : LinkedHashMap<Long, Boolean>(256, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Boolean>?): Boolean {
+                return size > 1024
+            }
+        }
+
+        @Synchronized
+        fun get(key: Long): Boolean? = cache[key]
+
+        @Synchronized
+        fun put(key: Long, allowed: Boolean) {
+            cache[key] = allowed
+        }
+
+        @Synchronized
+        fun clear() {
+            cache.clear()
         }
     }
 

@@ -18,6 +18,7 @@ internal data class RoutingRule(
         DOMAIN_SUFFIX,
         IP,
         CIDR,
+        PACKAGE,
     }
 
     enum class Action {
@@ -48,6 +49,16 @@ internal data class RoutingRule(
             MatchType.DOMAIN_SUFFIX -> normalizeDomain(value.trim().removePrefix("."))
             MatchType.IP -> parseAddress(value).hostAddress
             MatchType.CIDR -> normalizeCidr(value)
+            MatchType.PACKAGE -> normalizePackage(value)
+        }
+
+        private fun normalizePackage(value: String): String {
+            val candidate = value.trim().lowercase(Locale.ROOT)
+            require(candidate.isNotEmpty()) { "Package name must not be empty" }
+            require(candidate.matches(Regex("^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)+$"))) {
+                "Invalid package name format"
+            }
+            return candidate
         }
 
         private fun normalizeDomain(value: String): String {

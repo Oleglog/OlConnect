@@ -43,6 +43,16 @@ class OpenFluxUriTest {
     }
 
     @Test
+    fun parseDocMailruOpenFluxUri() {
+        val raw = "openflux://mailru?url=https%3A%2F%2Fdoc.mail.ru%2Fpublic%2F4R3g%2F5Vz4Wxyz&t=mailru#Doc+Mailru"
+        val profile = OpenFluxUri.parse(raw)
+
+        assertEquals("Doc Mailru", profile.name)
+        assertEquals("https://doc.mail.ru/public/4R3g/5Vz4Wxyz", profile.documentUrl)
+        assertEquals(OpenFluxProfile.Transport.MAILRU, profile.transport)
+    }
+
+    @Test
     fun serializeRoundTripMailru() {
         val original = OpenFluxProfile(
             name = "Mailru Profile",

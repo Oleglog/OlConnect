@@ -201,6 +201,7 @@
     <string name="settings_rule_type_domain_suffix">Domain suffix</string>
     <string name="settings_rule_type_ip">IP address</string>
     <string name="settings_rule_type_cidr">IP range (CIDR)</string>
+    <string name="settings_rule_type_package">Application package</string>
     <string name="settings_routing_preview">Rules are applied in this order after DNS and before LAN, Geo and the default route.</string>
     <string name="settings_rule_edit_title">Edit routing rule</string>
     <string name="settings_rule_delete_title">Delete routing rule?</string>

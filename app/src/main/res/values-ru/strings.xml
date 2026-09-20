@@ -202,6 +202,7 @@
     <string name="settings_rule_type_domain_suffix">Суффикс домена</string>
     <string name="settings_rule_type_ip">IP-адрес</string>
     <string name="settings_rule_type_cidr">Диапазон IP (CIDR)</string>
+    <string name="settings_rule_type_package">Пакет приложения</string>
     <string name="settings_routing_preview">Правила применяются по порядку после DNS и до LAN, Geo и маршрута по умолчанию.</string>
     <string name="settings_rule_edit_title">Изменить правило маршрутизации</string>
     <string name="settings_rule_delete_title">Удалить правило маршрутизации?</string>
