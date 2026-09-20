@@ -30,6 +30,8 @@ internal class OpenFluxSession(
     private val outputLock = Any()
     private val bytesUp = java.util.concurrent.atomic.AtomicLong(0)
     private val bytesDown = java.util.concurrent.atomic.AtomicLong(0)
+    private val pktsUp = java.util.concurrent.atomic.AtomicLong(0)
+    private val pktsDown = java.util.concurrent.atomic.AtomicLong(0)
 
     private var tunnelPfd: ParcelFileDescriptor? = null
     private var tunnelInput: FileInputStream? = null
@@ -87,6 +89,7 @@ internal class OpenFluxSession(
 
         workers.execute { readOutgoingPackets(input, dnsServer) }
         workers.execute { writeIncomingPackets(output) }
+        workers.execute { runStatsLoop() }
     }
 
     private fun readOutgoingPackets(input: FileInputStream, dns: String) {
@@ -129,7 +132,10 @@ internal class OpenFluxSession(
                 } else if (isIpv4Tcp(packet)) {
                     val sendErr = Mobilecore.sendOpenFlux(packet)
                     if (sendErr.isNullOrEmpty()) {
+                        pktsUp.incrementAndGet()
                         bytesUp.addAndGet(packet.size.toLong())
+                    } else {
+                        onLog("OpenFlux send error: $sendErr")
                     }
                 } else if (isIpv4Udp(packet)) {
                     workers.execute {
@@ -156,10 +162,33 @@ internal class OpenFluxSession(
                     Thread.sleep(2)
                     continue
                 }
+                pktsDown.incrementAndGet()
                 inject(output, packet)
             }
         } catch (e: Throwable) {
             if (!closed.get()) onFail("Запись TUN: ${e.message}")
+        }
+    }
+
+    private fun runStatsLoop() {
+        var lastTx = 0L
+        var lastRx = 0L
+        while (!closed.get()) {
+            Thread.sleep(4000)
+            if (closed.get()) break
+            val tx = pktsUp.get()
+            val rx = pktsDown.get()
+            val txBytes = bytesUp.get()
+            val rxBytes = bytesDown.get()
+            val logs = Mobilecore.readOpenFluxLogs()
+            if (!logs.isNullOrBlank()) {
+                onLog(logs)
+            }
+            if (tx != lastTx || rx != lastRx) {
+                onLog("OpenFlux datapath: tx=$tx pkts ($txBytes B), rx=$rx pkts ($rxBytes B)")
+                lastTx = tx
+                lastRx = rx
+            }
         }
     }
 

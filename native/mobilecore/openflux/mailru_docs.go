@@ -25,7 +25,10 @@ import (
 
 const mailruUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 
-var mailruCursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
+var (
+	mailruCursorPayloadRe = regexp.MustCompile(`\\?"cursor\\?":\\?"[^;]+;([^"\\]+)\\?"`)
+	mailruExcelPayloadRe  = regexp.MustCompile(`\\?"excelAdditionalInfo\\?":\\?"([^"\\]+)\\?"`)
+)
 
 type MailruDocsInfo struct {
 	Token        string
@@ -190,7 +193,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		}
 		headers := http.Header{}
 		headers.Set("User-Agent", mailruUserAgent)
-		origin := "https://cloud.mail.ru"
+		origin := "https://docs.datacloudmail.ru"
 		if info.ApiBase != "" {
 			origin = info.ApiBase
 		}
@@ -234,9 +237,9 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		auth1 := fmt.Sprintf(`40{"token":"%s"}`, info.Token)
 		session.safeWrite(websocket.TextMessage, []byte(auth1))
 
-		effectiveUserID := info.EditorUserID
-		if effectiveUserID == "" {
-			effectiveUserID = userID
+		peerUserID := userID
+		if info.EditorUserID != "" {
+			peerUserID = fmt.Sprintf("%s_%s", info.EditorUserID, userID)
 		}
 
 		authMsg := map[string]interface{}{
@@ -245,7 +248,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			"documentCallbackUrl": info.CallbackURL,
 			"token":               "fghhfgsjdgfjs",
 			"user": map[string]interface{}{
-				"id":        effectiveUserID,
+				"id":        peerUserID,
 				"username":  userID,
 				"indexUser": -1,
 			},
@@ -258,7 +261,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			"openCmd": map[string]interface{}{
 				"c":               "open",
 				"id":              info.DocKey,
-				"userid":          effectiveUserID,
+				"userid":          peerUserID,
 				"format":          info.FileType,
 				"url":             info.DocURL,
 				"title":           info.DocTitle,
@@ -387,7 +390,7 @@ func (t *MailruDocsTransport) handleMessage(session *MailruDocSession, data []by
 		return
 	}
 
-	if strings.Contains(text, "cursor") {
+	if strings.Contains(text, "cursor") || strings.Contains(text, "saveChanges") || strings.Contains(text, "excelAdditionalInfo") {
 		base64Str := t.extractBase64String(text)
 		if base64Str == "" {
 			return
@@ -405,9 +408,13 @@ func (t *MailruDocsTransport) handleMessage(session *MailruDocSession, data []by
 }
 
 func (t *MailruDocsTransport) extractBase64String(response string) string {
-	matches := mailruCursorPayloadRe.FindStringSubmatch(response)
-	if len(matches) > 1 {
+	if matches := mailruCursorPayloadRe.FindStringSubmatch(response); len(matches) > 1 {
 		return matches[1]
+	}
+	if strings.Contains(response, "saveChanges") || strings.Contains(response, "excelAdditionalInfo") {
+		if matches := mailruExcelPayloadRe.FindStringSubmatch(response); len(matches) > 1 {
+			return matches[1]
+		}
 	}
 	return ""
 }

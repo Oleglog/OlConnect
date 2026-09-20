@@ -950,6 +950,10 @@ class OlcrtcVpnService : VpnService() {
             .addAddress("10.10.10.2", 24)
             .addRoute("0.0.0.0", 0)
             .addDnsServer(dnsServer)
+        val activeNet = activeNetwork
+        if (activeNet != null) {
+            builder.setUnderlyingNetworks(arrayOf(activeNet))
+        }
         applyPerAppPolicy(builder, routingSettings.getPerAppPolicy(), profiles.getEnabledRoutingRules())
         return builder.establish()
             ?: error("failed to establish VPN interface for OpenFlux")
