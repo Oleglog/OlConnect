@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -195,11 +196,13 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		headers.Set("User-Agent", mailruUserAgent)
 		origin := "https://docs.datacloudmail.ru"
 		if info.ApiBase != "" {
-			origin = info.ApiBase
+			if u, err := url.Parse(info.ApiBase); err == nil && u.Scheme != "" && u.Host != "" {
+				origin = fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+			}
 		}
 		headers.Set("Origin", origin)
 
-		Debugf("[M-DOCS] WebSocket dial %s", info.WsURL)
+		Debugf("[M-DOCS] WebSocket dial %s (origin: %s)", info.WsURL, origin)
 		conn, resp, err := dialer.Dial(info.WsURL, headers)
 		if err != nil {
 			status := 0
@@ -210,7 +213,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			t.scheduleReconnect(attempt)
 			return
 		}
-		Debugf("[M-DOCS] WebSocket connected")
+		Debugf("[M-DOCS] WebSocket connected, handshaking Engine.IO...")
 
 		writeQueue := make(chan []byte, t.GetConfig().MaxQueueSize)
 		if existingSession != nil {
@@ -226,20 +229,51 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 
 		t.Mu.Lock()
 		t.session = session
-		t.SetConnected(true)
 		t.Mu.Unlock()
 
 		if existingSession == nil {
 			SafeGo("mailru.writer", t.writerLoop)
 		}
 
-		// Auth - fired immediately, same as the Yandex.Docs transport.
-		auth1 := fmt.Sprintf(`40{"token":"%s"}`, info.Token)
-		session.safeWrite(websocket.TextMessage, []byte(auth1))
+		// 1. Wait for Engine.IO open frame: 0{"sid":"...", ...}
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, openFrame, err := conn.ReadMessage()
+		if err != nil {
+			Debugf("[M-DOCS] Engine.IO open frame read failed: %v", err)
+			conn.Close()
+			t.scheduleReconnect(attempt)
+			return
+		}
+		if !strings.HasPrefix(string(openFrame), "0") {
+			Debugf("[M-DOCS] Warning: unexpected Engine.IO open frame: %s", string(openFrame))
+		}
 
-		peerUserID := userID
-		if info.EditorUserID != "" {
-			peerUserID = fmt.Sprintf("%s_%s", info.EditorUserID, userID)
+		// 2. Send Socket.IO connect frame: 40{"token":"..."}
+		auth1 := fmt.Sprintf(`40{"token":"%s"}`, info.Token)
+		if err := session.safeWrite(websocket.TextMessage, []byte(auth1)); err != nil {
+			Debugf("[M-DOCS] Failed to send Socket.IO connect: %v", err)
+			conn.Close()
+			t.scheduleReconnect(attempt)
+			return
+		}
+
+		// 3. Read Socket.IO connect ACK: 40{...}
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, ackFrame, err := conn.ReadMessage()
+		if err != nil {
+			Debugf("[M-DOCS] Socket.IO connect ACK read failed: %v", err)
+			conn.Close()
+			t.scheduleReconnect(attempt)
+			return
+		}
+		if !strings.HasPrefix(string(ackFrame), "40") {
+			Debugf("[M-DOCS] Warning: expected 40 ACK, got: %s", string(ackFrame))
+		}
+
+		// 4. Send 42 auth event
+		peerUserID := info.EditorUserID
+		if peerUserID == "" {
+			peerUserID = userID
 		}
 
 		authMsg := map[string]interface{}{
@@ -280,7 +314,14 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			"supportAuthChangesAck": true,
 		}
 		messagePart, _ := json.Marshal([]interface{}{"message", authMsg})
-		session.safeWrite(websocket.TextMessage, []byte(fmt.Sprintf("42%s", string(messagePart))))
+		auth2 := fmt.Sprintf("42%s", string(messagePart))
+		if err := session.safeWrite(websocket.TextMessage, []byte(auth2)); err != nil {
+			Debugf("[M-DOCS] Failed to send auth message: %v", err)
+			conn.Close()
+			t.scheduleReconnect(attempt)
+			return
+		}
+		_ = conn.SetReadDeadline(time.Time{})
 
 		connectedAt := time.Now()
 		for t.IsRunning() {
@@ -385,38 +426,59 @@ func (t *MailruDocsTransport) handleMessage(session *MailruDocSession, data []by
 		return
 	}
 
-	if strings.Contains(text, `"type":"auth"`) && strings.Contains(text, `"result":1`) {
-		Debugf("[M-DOCS] Auth OK for user %s", session.UserID)
+	if strings.Contains(text, `"type":"auth"`) {
+		if strings.Contains(text, `"result":1`) {
+			Debugf("[M-DOCS] Auth OK: session authenticated for user %s", session.UserID)
+			t.SetConnected(true)
+			return
+		}
+		if strings.Contains(text, `"result":0`) {
+			Debugf("[M-DOCS] Auth REJECTED: %s", text)
+			t.SetConnected(false)
+			return
+		}
+	}
+
+	if strings.Contains(text, `"type":"disconnectReason"`) {
+		Debugf("[M-DOCS] Received disconnectReason: %s", text)
+		t.SetConnected(false)
 		return
 	}
 
 	if strings.Contains(text, "cursor") || strings.Contains(text, "saveChanges") || strings.Contains(text, "excelAdditionalInfo") {
-		base64Str := t.extractBase64String(text)
-		if base64Str == "" {
-			return
-		}
+		base64Strings := t.extractAllBase64Strings(text)
+		for _, base64Str := range base64Strings {
+			decoded, err := base64.StdEncoding.DecodeString(base64Str)
+			if err != nil {
+				Debugf("[M-DOCS] Base64 decode error: %v", err)
+				continue
+			}
 
-		decoded, err := base64.StdEncoding.DecodeString(base64Str)
-		if err != nil {
-			Debugf("[M-DOCS] Base64 decode error: %v", err)
-			return
+			t.RecordReceive(len(decoded))
+			t.CallReceive(decoded)
 		}
-
-		t.RecordReceive(len(decoded))
-		t.CallReceive(decoded)
 	}
 }
 
-func (t *MailruDocsTransport) extractBase64String(response string) string {
-	if matches := mailruCursorPayloadRe.FindStringSubmatch(response); len(matches) > 1 {
-		return matches[1]
-	}
-	if strings.Contains(response, "saveChanges") || strings.Contains(response, "excelAdditionalInfo") {
-		if matches := mailruExcelPayloadRe.FindStringSubmatch(response); len(matches) > 1 {
-			return matches[1]
+func (t *MailruDocsTransport) extractAllBase64Strings(response string) []string {
+	var results []string
+	if matches := mailruCursorPayloadRe.FindAllStringSubmatch(response, -1); len(matches) > 0 {
+		for _, m := range matches {
+			if len(m) > 1 && m[1] != "" && !strings.Contains(m[1], "---KA---") {
+				results = append(results, m[1])
+			}
 		}
 	}
-	return ""
+	if strings.Contains(response, "saveChanges") || strings.Contains(response, "excelAdditionalInfo") {
+		if matches := mailruExcelPayloadRe.FindAllStringSubmatch(response, -1); len(matches) > 0 {
+			for _, m := range matches {
+				if len(m) > 1 && m[1] != "" {
+					results = append(results, m[1])
+				}
+			}
+		}
+	}
+	return results
 }
 
 func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
@@ -440,15 +502,16 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	clean := normalizeMailruWeblink(weblink)
+	randomEmail := fmt.Sprintf("user_%s@mail.ru", randMailruUserID())
 	reqBody := map[string]string{
-		"x-email":  "anonym",
+		"x-email":  randomEmail,
 		"public":   "/" + clean,
 		"platform": "desktop_web",
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
 	apiURL := "https://cloud.mail.ru/api/v4/r7/edit"
-	Debugf("[M-DOCS] fetchDocInfo POST %s (public: /%s)", apiURL, clean)
+	Debugf("[M-DOCS] fetchDocInfo POST %s (public: /%s, email: %s)", apiURL, clean, randomEmail)
 
 	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
