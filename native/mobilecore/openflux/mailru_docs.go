@@ -271,9 +271,9 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		}
 
 		// 4. Send 42 auth event
-		peerUserID := info.EditorUserID
-		if peerUserID == "" {
-			peerUserID = userID
+		peerUserID := userID
+		if info.EditorUserID != "" {
+			peerUserID = fmt.Sprintf("%s_%s", info.EditorUserID, userID)
 		}
 
 		authMsg := map[string]interface{}{
@@ -502,33 +502,53 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	clean := normalizeMailruWeblink(weblink)
-	randomEmail := fmt.Sprintf("user_%s@mail.ru", randMailruUserID())
 	reqBody := map[string]string{
-		"x-email":  randomEmail,
+		"x-email":  "anonym",
 		"public":   "/" + clean,
 		"platform": "desktop_web",
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	apiURL := "https://cloud.mail.ru/api/v4/r7/edit"
-	Debugf("[M-DOCS] fetchDocInfo POST %s (public: /%s, email: %s)", apiURL, clean, randomEmail)
-
-	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("User-Agent", mailruUserAgent)
-	req.Header.Set("X-Api-Version", "4")
-	req.Header.Set("Referer", fmt.Sprintf("https://cloud.mail.ru/public/%s?weblink=%s", clean, clean))
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return MailruDocsInfo{}, err
+	apiURLs := []string{
+		"https://cloud.mail.ru/api/v4/r7/edit",
+		"https://doc.mail.ru/api/v4/r7/edit",
 	}
-	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return MailruDocsInfo{}, fmt.Errorf("API returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	var lastErr error
+	var bodyBytes []byte
+
+	for _, apiURL := range apiURLs {
+		Debugf("[M-DOCS] fetchDocInfo POST %s (public: /%s)", apiURL, clean)
+
+		req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/plain, */*")
+		req.Header.Set("User-Agent", mailruUserAgent)
+		req.Header.Set("X-Api-Version", "4")
+		req.Header.Set("Referer", fmt.Sprintf("https://cloud.mail.ru/public/%s?weblink=%s", clean, clean))
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		bodyBytes, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			lastErr = nil
+			break
+		}
+		lastErr = fmt.Errorf("API %s returned status %d: %s", apiURL, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	if lastErr != nil {
+		return MailruDocsInfo{}, lastErr
 	}
 
 	var res map[string]interface{}
