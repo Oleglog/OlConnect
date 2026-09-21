@@ -24,4 +24,69 @@ class SubscriptionRefreshOnEntryTest {
     fun skipsWhenBothAlreadyRefreshedAndDisabled() {
         assertFalse(shouldRefreshOnColdStart(alreadyRefreshedThisSession = true, autoRefreshEnabled = false))
     }
+
+    @Test
+    fun refreshesOnEntryWhenEnabledAndNeverRefreshed() {
+        assertTrue(
+            shouldRefreshSubscriptionsOnEntry(
+                refreshInProgress = false,
+                lastRefreshElapsedMillis = 0L,
+                nowElapsedMillis = 10_000L,
+                minimumIntervalMillis = 180_000L,
+                autoRefreshEnabled = true,
+            )
+        )
+    }
+
+    @Test
+    fun skipsWhenRefreshInProgress() {
+        assertFalse(
+            shouldRefreshSubscriptionsOnEntry(
+                refreshInProgress = true,
+                lastRefreshElapsedMillis = 0L,
+                nowElapsedMillis = 10_000L,
+                minimumIntervalMillis = 180_000L,
+                autoRefreshEnabled = true,
+            )
+        )
+    }
+
+    @Test
+    fun skipsWhenWithinDebounceInterval() {
+        assertFalse(
+            shouldRefreshSubscriptionsOnEntry(
+                refreshInProgress = false,
+                lastRefreshElapsedMillis = 100_000L,
+                nowElapsedMillis = 200_000L,
+                minimumIntervalMillis = 180_000L,
+                autoRefreshEnabled = true,
+            )
+        )
+    }
+
+    @Test
+    fun refreshesWhenDebounceIntervalElapsed() {
+        assertTrue(
+            shouldRefreshSubscriptionsOnEntry(
+                refreshInProgress = false,
+                lastRefreshElapsedMillis = 100_000L,
+                nowElapsedMillis = 300_000L,
+                minimumIntervalMillis = 180_000L,
+                autoRefreshEnabled = true,
+            )
+        )
+    }
+
+    @Test
+    fun skipsWhenAutoRefreshDisabled() {
+        assertFalse(
+            shouldRefreshSubscriptionsOnEntry(
+                refreshInProgress = false,
+                lastRefreshElapsedMillis = 0L,
+                nowElapsedMillis = 300_000L,
+                minimumIntervalMillis = 180_000L,
+                autoRefreshEnabled = false,
+            )
+        )
+    }
 }

@@ -40,15 +40,36 @@ internal class OpenFluxSession(
     override fun isRunning(): Boolean = !closed.get()
     override fun trafficCounters(): TrafficCounters = TrafficCounters(bytesUp.get(), bytesDown.get())
     override fun releaseTun() {
-        runCatching { tunnelInput?.close() }
-        runCatching { tunnelOutput?.close() }
-        runCatching { tunnelPfd?.close() }
-        tunnelInput = null
-        tunnelOutput = null
-        tunnelPfd = null
+        synchronized(outputLock) {
+            runCatching { tunnelInput?.close() }
+            runCatching { tunnelOutput?.close() }
+            runCatching { tunnelPfd?.close() }
+            tunnelInput = null
+            tunnelOutput = null
+            tunnelPfd = null
+        }
+    }
+
+    private fun executeWorker(task: () -> Unit) {
+        if (closed.get()) return
+        try {
+            workers.execute {
+                if (closed.get()) return@execute
+                try {
+                    task()
+                } catch (t: Throwable) {
+                    if (!closed.get()) {
+                        onLog("OpenFlux worker error: ${t.message}")
+                    }
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // Pool is shutting down
+        }
     }
 
     fun start() {
+        Mobilecore.setOpenFluxCodec(profile.codec.value)
         if (!profile.encryptionKey.isNullOrBlank()) {
             Mobilecore.setOpenFluxEncryptionKey(profile.encryptionKey)
         } else {
@@ -87,9 +108,9 @@ internal class OpenFluxSession(
         tunnelInput = input
         tunnelOutput = output
 
-        workers.execute { readOutgoingPackets(input, dnsServer) }
-        workers.execute { writeIncomingPackets(output) }
-        workers.execute { runStatsLoop() }
+        executeWorker { readOutgoingPackets(input, dnsServer) }
+        executeWorker { writeIncomingPackets(output) }
+        executeWorker { runStatsLoop() }
     }
 
     private fun readOutgoingPackets(input: FileInputStream, dns: String) {
@@ -103,7 +124,7 @@ internal class OpenFluxSession(
                 // Enforce per-app and routing policy at packet boundary:
                 // Drop and reset packets from unallowed apps trying to bypass routing via SO_BINDTODEVICE tun0
                 if (isPacketAllowed != null && !isPacketAllowed.invoke(packet)) {
-                    workers.execute {
+                    executeWorker {
                         val out = synchronized(outputLock) { tunnelOutput }
                         if (out != null && !closed.get()) {
                             if (isIpv4Tcp(packet)) {
@@ -123,7 +144,7 @@ internal class OpenFluxSession(
                 }
 
                 if (isIpv4UdpDns(packet)) {
-                    workers.execute {
+                    executeWorker {
                         val out = synchronized(outputLock) { tunnelOutput }
                         if (out != null && !closed.get()) {
                             forwardDns(out, packet, dns)
@@ -138,7 +159,7 @@ internal class OpenFluxSession(
                         onLog("OpenFlux send error: $sendErr")
                     }
                 } else if (isIpv4Udp(packet)) {
-                    workers.execute {
+                    executeWorker {
                         val out = synchronized(outputLock) { tunnelOutput }
                         if (out != null && !closed.get()) {
                             val icmp = buildIcmpPortUnreachable(packet)
@@ -194,6 +215,7 @@ internal class OpenFluxSession(
 
     private fun forwardDns(output: FileOutputStream, request: ByteArray, dns: String) {
         val ipHeader = (request[0].toInt() and 0x0f) * 4
+        if (request.size < ipHeader + 8) return
         val dnsOffset = ipHeader + 8
         val udpLength = unsignedShort(request, ipHeader + 4)
         if (dnsOffset > request.size || udpLength < 8 || ipHeader + udpLength > request.size) return
@@ -259,7 +281,14 @@ internal class OpenFluxSession(
         if (closed.compareAndSet(false, true)) {
             releaseTun()
             Mobilecore.stopOpenFlux()
-            workers.shutdownNow()
+            workers.shutdown()
+            try {
+                if (!workers.awaitTermination(200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    workers.shutdownNow()
+                }
+            } catch (_: InterruptedException) {
+                workers.shutdownNow()
+            }
         }
     }
 
@@ -277,6 +306,7 @@ internal class OpenFluxSession(
         }
 
         internal fun buildTcpRst(orig: ByteArray): ByteArray {
+            if (orig.size < 20) return ByteArray(0)
             val ihl = (orig[0].toInt() and 0x0f) * 4
             if (orig.size < ihl + 20) return ByteArray(0)
             val tcpOffset = ihl
@@ -324,6 +354,7 @@ internal class OpenFluxSession(
         }
 
         internal fun buildIcmpPortUnreachable(orig: ByteArray): ByteArray {
+            if (orig.size < 20) return ByteArray(0)
             val ihl = (orig[0].toInt() and 0x0f) * 4
             if (orig.size < ihl + 8) return ByteArray(0)
             val quoteLen = ihl + 8
@@ -349,6 +380,7 @@ internal class OpenFluxSession(
 
         private fun buildDnsResponse(request: ByteArray, dns: ByteArray): ByteArray {
             val requestHeader = (request[0].toInt() and 0x0f) * 4
+            if (request.size < requestHeader + 2) return ByteArray(0)
             val response = ByteArray(20 + 8 + dns.size)
             response[0] = 0x45
             response[1] = request[1]

@@ -58,11 +58,26 @@ func (c *compressedTransport) IsConnected() bool { return c.inner.IsConnected() 
 func (c *compressedTransport) Stats() TransportStats { return c.inner.Stats() }
 
 func (c *compressedTransport) Send(data []byte) error {
+	return c.inner.Send(compress(data))
+}
+
+func (c *compressedTransport) Receive(handler func(data []byte)) {
+	c.inner.Receive(func(data []byte) {
+		decompressed, err := decompress(data)
+		if err != nil {
+			handler(data)
+			return
+		}
+		handler(decompressed)
+	})
+}
+
+func compress(data []byte) []byte {
 	if len(data) <= minCompressSize {
 		out := make([]byte, 1, len(data)+1)
 		out[0] = 0x00
 		out = append(out, data...)
-		return c.inner.Send(out)
+		return out
 	}
 
 	var buf bytes.Buffer
@@ -75,28 +90,19 @@ func (c *compressedTransport) Send(data []byte) error {
 		out := make([]byte, 1, len(data)+1)
 		out[0] = 0x00
 		out = append(out, data...)
-		return c.inner.Send(out)
+		return out
 	}
 
-	return c.inner.Send(buf.Bytes())
+	return buf.Bytes()
 }
 
-func (c *compressedTransport) Receive(handler func(data []byte)) {
-	c.inner.Receive(func(data []byte) {
-		if len(data) < 1 {
-			handler(data)
-			return
-		}
-		if data[0] == 0x00 {
-			handler(data[1:])
-			return
-		}
-		r := lz4.NewReader(bytes.NewReader(data[1:]))
-		decompressed, err := io.ReadAll(r)
-		if err != nil {
-			handler(data)
-			return
-		}
-		handler(decompressed)
-	})
+func decompress(data []byte) ([]byte, error) {
+	if len(data) < 1 {
+		return data, nil
+	}
+	if data[0] == 0x00 {
+		return data[1:], nil
+	}
+	r := lz4.NewReader(bytes.NewReader(data[1:]))
+	return io.ReadAll(r)
 }

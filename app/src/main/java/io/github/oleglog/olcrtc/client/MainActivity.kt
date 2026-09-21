@@ -90,7 +90,8 @@ class MainActivity : AppCompatActivity() {
     private val updatePreferences by lazy { getSharedPreferences(UPDATE_PREFERENCES, Context.MODE_PRIVATE) }
     private val systemPreferences by lazy { getSharedPreferences(SYSTEM_PREFERENCES, Context.MODE_PRIVATE) }
     private val profiles by lazy { ProfileRepository.open(applicationContext) }
-    @Volatile private var subscriptionRefreshedThisSession = false
+    private var lastSubscriptionRefreshElapsed = 0L
+    private var subscriptionRefreshInProgress = false
 
     private val callback = object : IVpnStateCallback.Stub() {
         override fun onStateChanged(state: Int, error: String?, stage: Int, reconnectAttempt: Int) {
@@ -173,7 +174,7 @@ class MainActivity : AppCompatActivity() {
         }
         refreshBackgroundEffects()
         acceptExternalIntent(intent)
-        refreshStaleSubscriptionsOnEntry()
+        refreshSubscriptionsOnEntry()
     }
 
     private fun setupMainPager() {
@@ -221,6 +222,7 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         refreshBackgroundEffects()
         bound = bindService(Intent(this, OlcrtcVpnService::class.java), connection, Context.BIND_AUTO_CREATE)
+        refreshSubscriptionsOnEntry()
         if (showBatteryOptimizationRecommendation()) return
         if (!showPendingUpdatePrompt()) checkForUpdateOnEntry()
     }
@@ -337,17 +339,27 @@ class MainActivity : AppCompatActivity() {
     // @Volatile flag without persistence is enough to keep it to once per session.
     // Runs over direct HTTP — the subscription host is reachable without a tunnel,
     // unlike github (see checkForUpdateThroughTunnelOrDirect).
-    private fun refreshStaleSubscriptionsOnEntry() {
+    private fun refreshSubscriptionsOnEntry() {
         val enabled = RoutingSettings.open(applicationContext).getAutoSubscriptionRefresh()
-        if (!shouldRefreshOnColdStart(
-                alreadyRefreshedThisSession = subscriptionRefreshedThisSession,
+        val now = SystemClock.elapsedRealtime()
+        if (!shouldRefreshSubscriptionsOnEntry(
+                refreshInProgress = subscriptionRefreshInProgress,
+                lastRefreshElapsedMillis = lastSubscriptionRefreshElapsed,
+                nowElapsedMillis = now,
+                minimumIntervalMillis = AUTOMATIC_SUBSCRIPTION_REFRESH_INTERVAL_MILLIS,
                 autoRefreshEnabled = enabled,
             )
         ) return
-        subscriptionRefreshedThisSession = true
+        subscriptionRefreshInProgress = true
+        lastSubscriptionRefreshElapsed = now
         lifecycleScope.launch {
-            withContext(Dispatchers.IO) {
-                runCatching { SubscriptionRefresher(profiles).refreshStale() }
+            try {
+                withContext(Dispatchers.IO) {
+                    SubscriptionRefresher(profiles).refreshEnabled()
+                }
+            } catch (_: Throwable) {
+            } finally {
+                subscriptionRefreshInProgress = false
             }
         }
     }
@@ -656,6 +668,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_PENDING_SUBSCRIPTION_PROFILE_ID = "pending_subscription_profile_id"
         private const val MAX_EXTERNAL_IMPORT_CHARS = 16 * 1024
         private const val AUTOMATIC_UPDATE_CHECK_INTERVAL_MILLIS = 5 * 60 * 1000L
+        private const val AUTOMATIC_SUBSCRIPTION_REFRESH_INTERVAL_MILLIS = 3 * 60 * 1000L
         private const val UPDATE_PREFERENCES = "updates"
         private const val KEY_LAST_PROMPTED_UPDATE_TAG = "last_prompted_tag"
         private const val SYSTEM_PREFERENCES = "system"
@@ -695,6 +708,18 @@ internal fun shouldRefreshOnColdStart(
     alreadyRefreshedThisSession: Boolean,
     autoRefreshEnabled: Boolean,
 ): Boolean = !alreadyRefreshedThisSession && autoRefreshEnabled
+
+internal fun shouldRefreshSubscriptionsOnEntry(
+    refreshInProgress: Boolean,
+    lastRefreshElapsedMillis: Long,
+    nowElapsedMillis: Long,
+    minimumIntervalMillis: Long,
+    autoRefreshEnabled: Boolean,
+): Boolean {
+    if (!autoRefreshEnabled || refreshInProgress) return false
+    if (lastRefreshElapsedMillis <= 0L) return true
+    return nowElapsedMillis - lastRefreshElapsedMillis >= minimumIntervalMillis
+}
 
 internal fun shouldDeliverExternalImportImmediately(
     destinationId: Int,

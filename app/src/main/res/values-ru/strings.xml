@@ -21,6 +21,7 @@
     <string name="profile_field_name">Название</string>
     <string name="profile_field_provider">Провайдер</string>
     <string name="profile_field_transport">Транспорт</string>
+    <string name="profile_field_codec">Кодек / формат кадров</string>
     <string name="profile_field_room_id">ID комнаты</string>
     <string name="profile_field_room_password">Пароль комнаты</string>
     <string name="profile_field_client_id">ID клиента</string>

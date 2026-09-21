@@ -6,6 +6,7 @@ data class OpenFluxProfile(
     val name: String,
     val documentUrl: String,
     val transport: Transport = Transport.AUTO,
+    val codec: Codec = Codec.BATCHED,
     val dnsServer: String? = null,
     val encryptionKey: String? = null,
 ) {
@@ -27,6 +28,16 @@ data class OpenFluxProfile(
         companion object {
             fun parse(value: String): Transport = entries.firstOrNull { it.value == value.trim().lowercase() }
                 ?: AUTO
+        }
+    }
+
+    enum class Codec(val value: String) {
+        BATCHED("batched"),
+        LEGACY("legacy");
+
+        companion object {
+            fun parse(value: String): Codec = entries.firstOrNull { it.value == value.trim().lowercase() }
+                ?: BATCHED
         }
     }
 }

@@ -20,6 +20,7 @@
     <string name="profile_field_name">Name</string>
     <string name="profile_field_provider">Provider</string>
     <string name="profile_field_transport">Transport</string>
+    <string name="profile_field_codec">Wire codec</string>
     <string name="profile_field_room_id">Room ID</string>
     <string name="profile_field_room_password">Room password</string>
     <string name="profile_field_client_id">Client ID</string>
@@ -303,7 +304,7 @@
     <string name="connection_latency_value">%1$d ms</string>
     <string name="connection_tap_to_start">Tap to start</string>
     <string name="brand_olc" translatable="false">olc</string>
-    <string name="brand_rtc" translatable="false">RTC</string>
+    <string name="brand_rtc" translatable="false">Connect</string>
     <string name="connection_timer_zero" translatable="false">00:00</string>
     <string name="connection_today">Today</string>
     <string name="connection_download">Download</string>

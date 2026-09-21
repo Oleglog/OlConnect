@@ -605,3 +605,15 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 func randMailruUserID() string {
 	return fmt.Sprintf("%010d", rand.New(rand.NewSource(time.Now().UnixNano())).Intn(1000000000))
 }
+
+func (t *MailruDocsTransport) Stop() error {
+	_ = t.BaseTransport.Stop()
+	t.Mu.Lock()
+	session := t.session
+	t.session = nil
+	t.Mu.Unlock()
+	if session != nil && session.Conn != nil {
+		_ = session.Conn.Close()
+	}
+	return nil
+}

@@ -10,6 +10,8 @@ var (
 	client        = packetClient{}
 	encKeyMu      sync.Mutex
 	encryptionKey string
+	codecMu       sync.Mutex
+	currentCodec  = "batched"
 )
 
 // SetEncryptionKey configures an optional AES-256-GCM transport key.
@@ -17,6 +19,18 @@ func SetEncryptionKey(key string) {
 	encKeyMu.Lock()
 	defer encKeyMu.Unlock()
 	encryptionKey = strings.TrimSpace(key)
+}
+
+// SetCodec configures the wire format: "batched" (coalesced zstd) or "legacy" (per-packet LZ4).
+func SetCodec(codec string) {
+	codecMu.Lock()
+	defer codecMu.Unlock()
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "legacy":
+		currentCodec = "legacy"
+	default:
+		currentCodec = "batched"
+	}
 }
 
 type packetClient struct {
@@ -43,8 +57,15 @@ func Start(documentURL string, transportType string) string {
 
 	client.mu.Lock()
 	if client.running {
+		prev := client.transport
+		client.running = false
+		client.transport = nil
+		client.packets = nil
 		client.mu.Unlock()
-		return ""
+		if prev != nil {
+			_ = prev.Stop()
+		}
+		client.mu.Lock()
 	}
 	client.running = true
 	client.packets = nil
@@ -89,7 +110,18 @@ func Start(documentURL string, transportType string) string {
 		innerTrans = encTrans
 	}
 
-	trans := newCompressedTransport(innerTrans)
+	codecMu.Lock()
+	codec := currentCodec
+	codecMu.Unlock()
+
+	var trans Transport
+	if codec == "legacy" {
+		appendLog("[ANDROID] Использование legacy LZ4 кодека")
+		trans = newCompressedTransport(innerTrans)
+	} else {
+		appendLog("[ANDROID] Использование batched+zstd кодека")
+		trans = NewBatchedTransport(innerTrans)
+	}
 	trans.Receive(func(data []byte) {
 		packet := append([]byte(nil), data...)
 		client.mu.Lock()

@@ -1562,6 +1562,15 @@ internal fun connectionTypeLabel(type: String, endpoint: String): String = when 
         "jitsi" -> "Jitsi"
         else -> "olcRTC"
     }
+    "openflux" -> {
+        val lower = endpoint.lowercase(Locale.ROOT)
+        when {
+            "mail" in lower -> "Mail.ru Docs"
+            "volga" in lower || "vyandex" in lower -> "Yandex Volga"
+            "yandex" in lower -> "Yandex Docs"
+            else -> "OpenFlux"
+        }
+    }
     "vless" -> "VLESS"
     "vmess" -> "VMess"
     "trojan" -> "Trojan"

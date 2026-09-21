@@ -80,7 +80,12 @@ internal class ProfileRepository(
         olcrtcProfiles.getAll().map {
             ProfileSummary(it.id, it.name, "olcRTC", "${it.provider} · ${it.roomId}")
         } + openfluxProfiles.getAll().map {
-            ProfileSummary(OPENFLUX_ID_OFFSET + it.id, it.name, "OpenFlux", "Yandex · ${it.transport}")
+            val transportLabel = when (it.transport.lowercase()) {
+                "mailru" -> "Mail.ru · Docs"
+                "vyandex" -> "Yandex · Volga"
+                else -> "Yandex · Docs"
+            }
+            ProfileSummary(OPENFLUX_ID_OFFSET + it.id, it.name, "OpenFlux", transportLabel)
         } + standardProfiles.getAll().map {
             ProfileSummary(STANDARD_ID_OFFSET + it.id, it.name, it.protocol, "${it.address}:${it.port}")
         }
@@ -536,7 +541,10 @@ internal class ProfileRepository(
                         name = profileName,
                         documentUrl = value.getString("documentUrl"),
                         transport = io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.parse(value.getString("transport")),
+                        codec = value.optString("codec").takeIf(String::isNotBlank)?.let(io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec::parse)
+                            ?: io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec.BATCHED,
                         dnsServer = value.stringOrNull("dnsServer"),
+                        encryptionKey = value.stringOrNull("encryptionKey"),
                     ),
                 )
             }
@@ -552,7 +560,9 @@ internal class ProfileRepository(
         .put("name", name)
         .put("documentUrl", documentUrl)
         .put("transport", transport.value)
+        .put("codec", codec.value)
         .put("dnsServer", dnsServer)
+        .put("encryptionKey", encryptionKey)
         .toString()
 
     private fun OlcrtcProfile.toJson(): String = JSONObject()
@@ -721,7 +731,11 @@ internal class ProfileRepository(
 
     private fun ImportedProfile?.endpointDescription(): String = when (this) {
         is ImportedProfile.Olcrtc -> "${value.provider.value} · ${value.roomId}"
-        is ImportedProfile.OpenFlux -> "OpenFlux · ${value.transport.value}"
+        is ImportedProfile.OpenFlux -> when (value.transport.value.lowercase()) {
+            "mailru" -> "Mail.ru · Docs"
+            "vyandex" -> "Yandex · Volga"
+            else -> "Yandex · Docs"
+        }
         is ImportedProfile.Standard -> "${value.address}:${value.port}"
         null -> "unavailable"
     }

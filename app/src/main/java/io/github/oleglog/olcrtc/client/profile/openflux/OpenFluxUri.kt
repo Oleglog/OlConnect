@@ -18,6 +18,7 @@ internal object OpenFluxUri {
         require(!urlParam.isNullOrBlank()) { "OpenFlux URI requires 'url' parameter" }
 
         val transportParam = params["t"] ?: params["transport"] ?: "auto"
+        val codecParam = params["c"] ?: params["codec"]
         val dnsParam = params["d"] ?: params["dns"]
         val keyParam = params["k"] ?: params["key"]
         val fragment = uri.rawFragment?.let(::decode)?.takeIf(String::isNotBlank)
@@ -28,6 +29,7 @@ internal object OpenFluxUri {
             name = name,
             documentUrl = urlParam,
             transport = OpenFluxProfile.Transport.parse(transportParam),
+            codec = codecParam?.let(OpenFluxProfile.Codec::parse) ?: OpenFluxProfile.Codec.BATCHED,
             dnsServer = dnsParam,
             encryptionKey = keyParam,
         )
@@ -39,6 +41,9 @@ internal object OpenFluxUri {
         val builder = StringBuilder("openflux://$host?url=").append(encodedUrl)
         if (profile.transport != OpenFluxProfile.Transport.AUTO) {
             builder.append("&t=").append(encode(profile.transport.value))
+        }
+        if (profile.codec != OpenFluxProfile.Codec.BATCHED) {
+            builder.append("&c=").append(encode(profile.codec.value))
         }
         if (!profile.dnsServer.isNullOrBlank()) {
             builder.append("&d=").append(encode(profile.dnsServer))

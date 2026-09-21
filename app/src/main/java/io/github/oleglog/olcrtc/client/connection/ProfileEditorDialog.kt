@@ -207,6 +207,19 @@ internal object ProfileEditorDialog {
             io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.entries,
             profile.transport,
         )
+        val codec = choice(
+            fragment,
+            form,
+            R.string.profile_field_codec,
+            io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec.entries,
+            profile.codec,
+            labels = {
+                when (it) {
+                    io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec.BATCHED -> "Batched (ZSTD)"
+                    io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec.LEGACY -> "Legacy (LZ4)"
+                }
+            },
+        )
         val dns = field(fragment, form, R.string.profile_field_dns, profile.dnsServer.orEmpty())
 
         return {
@@ -215,7 +228,9 @@ internal object ProfileEditorDialog {
                     name = name.requiredValue(fragment.getString(R.string.profile_value_required)),
                     documentUrl = url.requiredValue(fragment.getString(R.string.profile_value_required)),
                     transport = transport.selected,
+                    codec = codec.selected,
                     dnsServer = dns.optionalValue(),
+                    encryptionKey = profile.encryptionKey,
                 ),
             )
         }

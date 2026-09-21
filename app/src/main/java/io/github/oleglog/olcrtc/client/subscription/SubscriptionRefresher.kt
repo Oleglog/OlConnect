@@ -37,6 +37,9 @@ internal class SubscriptionRefresher(
     fun refreshStale(now: Long = System.currentTimeMillis()): Int =
         repository.getStaleSubscriptionIds(now).count { refresh(it, now) }
 
+    fun refreshEnabled(now: Long = System.currentTimeMillis()): Int =
+        repository.listSubscriptions().filter { it.enabled }.count { refresh(it.id, now, force = false) }
+
     fun refresh(
         subscriptionId: Long,
         now: Long = System.currentTimeMillis(),

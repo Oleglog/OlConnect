@@ -87,4 +87,37 @@ class OpenFluxUriTest {
         assertEquals(original.dnsServer, parsed.dnsServer)
         assertEquals(original.encryptionKey, parsed.encryptionKey)
     }
+
+    @Test
+    fun parseUriWithCodec() {
+        val rawLegacy = "openflux://yandex?url=https%3A%2F%2Fdisk.yandex.ru%2Fi%2Ftest1234&c=legacy#Legacy+Profile"
+        val profileLegacy = OpenFluxUri.parse(rawLegacy)
+        assertEquals(OpenFluxProfile.Codec.LEGACY, profileLegacy.codec)
+
+        val rawBatched = "openflux://yandex?url=https%3A%2F%2Fdisk.yandex.ru%2Fi%2Ftest1234&c=batched#Batched+Profile"
+        val profileBatched = OpenFluxUri.parse(rawBatched)
+        assertEquals(OpenFluxProfile.Codec.BATCHED, profileBatched.codec)
+
+        val rawDefault = "openflux://yandex?url=https%3A%2F%2Fdisk.yandex.ru%2Fi%2Ftest1234#Default+Profile"
+        val profileDefault = OpenFluxUri.parse(rawDefault)
+        assertEquals(OpenFluxProfile.Codec.BATCHED, profileDefault.codec)
+    }
+
+    @Test
+    fun serializeRoundTripWithCodecLegacy() {
+        val original = OpenFluxProfile(
+            name = "Legacy Codec Profile",
+            documentUrl = "https://disk.yandex.ru/i/JsCiJYtJjOP-Aw",
+            transport = OpenFluxProfile.Transport.VYANDEX,
+            codec = OpenFluxProfile.Codec.LEGACY,
+        )
+        val uri = OpenFluxUri.serialize(original)
+        assert(uri.contains("&c=legacy"))
+        val parsed = OpenFluxUri.parse(uri)
+
+        assertEquals(original.name, parsed.name)
+        assertEquals(original.documentUrl, parsed.documentUrl)
+        assertEquals(original.transport, parsed.transport)
+        assertEquals(OpenFluxProfile.Codec.LEGACY, parsed.codec)
+    }
 }

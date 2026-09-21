@@ -409,6 +409,10 @@ func SetOpenFluxEncryptionKey(key string) {
 	openflux.SetEncryptionKey(key)
 }
 
+func SetOpenFluxCodec(codec string) {
+	openflux.SetCodec(codec)
+}
+
 func StopOpenFlux() {
 	openflux.Stop()
 }
