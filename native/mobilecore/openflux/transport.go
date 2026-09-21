@@ -63,6 +63,18 @@ func (c *compressedTransport) Send(data []byte) error {
 
 func (c *compressedTransport) Receive(handler func(data []byte)) {
 	c.inner.Receive(func(data []byte) {
+		if len(data) == 0 {
+			return
+		}
+		if data[0] == batchFormatVersion {
+			pkts, err := decodeFramedBatch(data)
+			if err == nil {
+				for _, p := range pkts {
+					handler(p)
+				}
+				return
+			}
+		}
 		decompressed, err := decompress(data)
 		if err != nil {
 			handler(data)
