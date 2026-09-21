@@ -63,9 +63,9 @@ func frameBatch(pkts [][]byte) []byte {
 	return out
 }
 
-// encodeBatch serializes packets into a single wire frame, compressing the
+// encodeFramedBatch serializes packets into a single wire frame, compressing the
 // whole batch with zstd only when that actually shrinks it.
-func encodeBatch(pkts [][]byte) []byte {
+func encodeFramedBatch(pkts [][]byte) []byte {
 	framed := frameBatch(pkts)
 	compressed := zstdEnc.EncodeAll(framed, nil)
 
@@ -81,8 +81,8 @@ func encodeBatch(pkts [][]byte) []byte {
 	return append(out, framed...)
 }
 
-// decodeBatch reverses encodeBatch, returning the original packets.
-func decodeBatch(data []byte) ([][]byte, error) {
+// decodeFramedBatch reverses encodeFramedBatch, returning the original packets.
+func decodeFramedBatch(data []byte) ([][]byte, error) {
 	if len(data) < 2 {
 		return nil, fmt.Errorf("batch frame too short: %d bytes", len(data))
 	}

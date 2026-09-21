@@ -114,7 +114,7 @@ func (b *BatchedTransport) Receive(callback func([]byte)) {
 			return
 		}
 
-		pkts, err := decodeBatch(data)
+		pkts, err := decodeFramedBatch(data)
 		if err != nil {
 			Debugf("[BATCH] decode error (%d bytes): %v", len(data), err)
 			return
@@ -155,7 +155,7 @@ func (b *BatchedTransport) flushLoop() {
 				return
 			case p, ok := <-b.queue:
 				if !ok {
-					_ = b.Transport.Send(encodeBatch(batch))
+					_ = b.Transport.Send(encodeFramedBatch(batch))
 					return
 				}
 				batch = append(batch, p)
@@ -177,7 +177,7 @@ func (b *BatchedTransport) flushLoop() {
 				case p, ok := <-b.queue:
 					if !ok {
 						timer.Stop()
-						_ = b.Transport.Send(encodeBatch(batch))
+						_ = b.Transport.Send(encodeFramedBatch(batch))
 						return
 					}
 					batch = append(batch, p)
@@ -189,6 +189,6 @@ func (b *BatchedTransport) flushLoop() {
 			timer.Stop()
 		}
 
-		_ = b.Transport.Send(encodeBatch(batch))
+		_ = b.Transport.Send(encodeFramedBatch(batch))
 	}
 }
