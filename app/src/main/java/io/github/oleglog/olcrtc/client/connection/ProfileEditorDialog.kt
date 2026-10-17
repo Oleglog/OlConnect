@@ -234,6 +234,26 @@ internal object ProfileEditorDialog {
         )
         val dns = field(fragment, form, R.string.profile_field_dns, profile.dnsServer.orEmpty())
         val cookies = field(fragment, form, R.string.profile_field_cookies, profile.cookies.orEmpty())
+        // Cookie paste/clear helpers: cookies.txt content is long, typing it
+        // by hand is error-prone — paste from the clipboard in one tap.
+        // ponytail: no file picker, clipboard paste covers the flow
+        LinearLayout(fragment.requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(com.google.android.material.button.MaterialButton(fragment.requireContext()).apply {
+                setText(R.string.profile_cookies_paste)
+                setOnClickListener {
+                    val clipboard = fragment.requireContext()
+                        .getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    clipboard.primaryClip?.getItemAt(0)?.coerceToText(fragment.requireContext())
+                        ?.toString()?.takeIf(String::isNotBlank)?.let(cookies::setValue)
+                }
+            })
+            addView(com.google.android.material.button.MaterialButton(fragment.requireContext()).apply {
+                setText(R.string.profile_cookies_clear)
+                setOnClickListener { cookies.setValue("") }
+            })
+        }.also(form::addView)
 
         return {
             ProfileConfig.OpenFlux(

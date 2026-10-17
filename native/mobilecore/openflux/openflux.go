@@ -3,6 +3,7 @@ package openflux
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -133,16 +134,16 @@ func Start(documentURL string, transportType string) string {
 		innerTrans = mr
 	case "avito":
 		appendLog("[ANDROID] Обнаружен сервис Avito. Запуск транспорта avito")
-		innerTrans = avito.NewAvitoTransport(documentURL, config, "", true)
+		innerTrans = avito.NewAvitoTransport(documentURL, config, sessionCookieHeader(), true)
 	case "cupsonline", "cups":
 		appendLog("[ANDROID] Обнаружен сервис Cups.online. Запуск транспорта cupsonline")
 		innerTrans = cupsonline.NewCupsonlineTransport(documentURL, config, true)
 	case "telemost":
 		appendLog("[ANDROID] Обнаружена конференция Telemost. Запуск транспорта telemost")
-		innerTrans = yandex.NewTelemostTransport("", documentURL, false, config)
+		innerTrans = yandex.NewTelemostTransport(sessionCookieHeader(), documentURL, false, config)
 	case "bitrix24", "b24":
 		appendLog("[ANDROID] Обнаружен сервис Bitrix24. Запуск транспорта bitrix24")
-		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, os.Getenv("B24_COOKIES"), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
+		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, sessionCookieHeader(), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
 	case "vyandex", "volga":
 		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
 		vt := yandex.NewYandexVolgaTransport(documentURL, config)
@@ -214,6 +215,25 @@ func Start(documentURL string, transportType string) string {
 	client.transport = trans
 	client.mu.Unlock()
 	return ""
+}
+
+// sessionCookieHeader renders the stored session cookies as a raw Cookie
+// header value ("name=value; ...") for transports that take cookies as a
+// plain string (avito, telemost, bitrix24). Netscape cookies.txt lines are
+// reduced to their name=value pairs.
+func sessionCookieHeader() string {
+	cookiesMu.Lock()
+	raw := sessionCookies
+	cookiesMu.Unlock()
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	parts := make([]string, 0, len(parseSessionCookies(raw)))
+	for name, value := range parseSessionCookies(raw) {
+		parts = append(parts, name+"="+value)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
 }
 
 // cookieApplier is implemented by transports with a cookie jar (mailru, yandex).

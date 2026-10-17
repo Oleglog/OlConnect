@@ -50,12 +50,29 @@ func envInt(name string, def int) int {
 	return def
 }
 
+// BatchSizeHinter is optionally implemented by inner transports to tell the
+// coalescing layer how many bytes fit into one channel message. Mail.ru and
+// Bitrix24 chat carriers accept hundreds of KB per message; the 8 KB default
+// would spray every TCP segment as its own message and drown in per-message
+// pacing. OPENFLUX_BATCH_BYTES still overrides whatever the hint says.
+type BatchSizeHinter interface {
+	PreferredBatchBytes() int
+}
+
 func NewBatchedTransport(inner Transport) *BatchedTransport {
+	maxBytes := envInt("OPENFLUX_BATCH_BYTES", 0)
+	if maxBytes <= 0 {
+		if hinter, ok := inner.(BatchSizeHinter); ok && hinter.PreferredBatchBytes() > 0 {
+			maxBytes = hinter.PreferredBatchBytes()
+		} else {
+			maxBytes = defaultMaxBatchBytes
+		}
+	}
 	return &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
 		lingerMs:      envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
-		maxBatchBytes: envInt("OPENFLUX_BATCH_BYTES", defaultMaxBatchBytes),
+		maxBatchBytes: maxBytes,
 		maxBatchCount: envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount),
 	}
 }

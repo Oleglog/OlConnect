@@ -268,6 +268,15 @@ type MailruDocsTransport struct {
 	// the old connection also sees the new connection's echoes. Without tracking
 	// all of them, the old reader would re-deliver our own egress as ingress.
 	ourIDs sync.Map
+
+	// authedConn counts carrier connections whose auth the server accepted.
+	// hasCookies is snapshotted at Start: comparing the 4004-kick budget
+	// (sentCount at kick time, logged in handleMessage) between anonymous and
+	// authorized sessions tells whether cookie sessions get a bigger message
+	// budget — right now rotation is tuned blind for both.
+	authedConn  atomic.Int64
+	hasCookies  atomic.Bool
+	kickBudgets atomic.Int64 // kicks observed (for the Infof summary line)
 }
 
 // mailruRecvQueue bounds the decoupling receive buffer (whole batches, so kept
@@ -969,7 +978,8 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	}
 
 	if strings.Contains(text, `"type":"auth"`) && strings.Contains(text, `"result":1`) {
-		utils.Debugf("[M-DOCS] Auth OK for user %s", session.UserID)
+		n := t.authedConn.Add(1)
+		utils.Debugf("[M-DOCS] Auth OK for user %s (conn #%d, cookies=%v)", session.UserID, n, t.hasCookies.Load())
 		// The server has accepted this connection: it will now relay our chat.
 		// A rotation waits on this before moving sends onto the new connection.
 		if session != nil {
@@ -982,8 +992,16 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	// frame (e.g. code 4004 "access deny" anti-abuse, 4007 "drop" lock
 	// contention) just before the socket closes. Surface it at INFO — it is rare
 	// and it is the one line that explains an otherwise bare "close 1005".
+	// The sent-count at kick time is the measured 4004 budget: compare
+	// anonymous vs cookie sessions to see if authorized users get more room.
 	if strings.Contains(text, "disconnectReason") {
-		utils.Infof("[M-DOCS] server disconnectReason: %.200s", text)
+		n := t.kickBudgets.Add(1)
+		var sent int64
+		if session != nil {
+			sent = session.sentCount.Load()
+		}
+		utils.Infof("[M-DOCS] server disconnectReason (kick #%d, cookies=%v, sent=%d): %.200s",
+			n, t.hasCookies.Load(), sent, text)
 		return
 	}
 
@@ -1392,6 +1410,7 @@ func (t *MailruDocsTransport) ApplyCookies(values map[string]string) error {
 	t.jarMu.Lock()
 	t.cookieJar = jar
 	t.jarMu.Unlock()
+	t.hasCookies.Store(true)
 
 	utils.Debugf("[M-DOCS] applied %d cookies, forcing reconnect", len(cookies))
 
