@@ -1,4 +1,4 @@
-package openflux
+package transport
 
 import (
 	"encoding/binary"
@@ -7,7 +7,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Wire format for a batched frame (one transport message can now carry
+// Wire format for a batched frame (one Yandex/transport message can now carry
 // many tunnel packets):
 //
 //	[0]   version byte (batchFormatVersion)
@@ -27,8 +27,8 @@ var (
 func init() {
 	var err error
 	// SpeedDefault (~level 3): far better ratio than LZ4 at a CPU cost that is
-	// irrelevant next to the cloud document channel latency. Single-shot
-	// EncodeAll / DecodeAll are safe for concurrent use on a shared instance.
+	// irrelevant next to the Yandex channel's latency. Single-shot EncodeAll /
+	// DecodeAll are safe for concurrent use on a shared instance.
 	zstdEnc, err = zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.SpeedDefault),
 		zstd.WithEncoderConcurrency(1),
@@ -39,7 +39,7 @@ func init() {
 	zstdDec, err = zstd.NewReader(nil,
 		zstd.WithDecoderConcurrency(1),
 		// Bound the damage from a malformed/hostile frame injected into the
-		// shared document: cap decompressed memory to 8MB.
+		// shared document: cap decompressed memory.
 		zstd.WithDecoderMaxMemory(8<<20),
 	)
 	if err != nil {
@@ -63,9 +63,9 @@ func frameBatch(pkts [][]byte) []byte {
 	return out
 }
 
-// encodeFramedBatch serializes packets into a single wire frame, compressing the
+// encodeBatch serializes packets into a single wire frame, compressing the
 // whole batch with zstd only when that actually shrinks it.
-func encodeFramedBatch(pkts [][]byte) []byte {
+func encodeBatch(pkts [][]byte) []byte {
 	framed := frameBatch(pkts)
 	compressed := zstdEnc.EncodeAll(framed, nil)
 
@@ -81,8 +81,15 @@ func encodeFramedBatch(pkts [][]byte) []byte {
 	return append(out, framed...)
 }
 
-// decodeFramedBatch reverses encodeFramedBatch, returning the original packets.
-func decodeFramedBatch(data []byte) ([][]byte, error) {
+// EncodeBatchFrame serializes packets into a wire-v2 frame for transports that
+// carry the frame themselves instead of delegating to BatchedTransport - the
+// Telemost SFU path wraps each frame in a VP8 keyframe rather than passing it
+// up the transport stack. Such a transport must produce byte for byte what
+// BatchedTransport would have produced, or the receiving side rejects it.
+func EncodeBatchFrame(pkts [][]byte) []byte { return encodeBatch(pkts) }
+
+// decodeBatch reverses encodeBatch, returning the original packets.
+func decodeBatch(data []byte) ([][]byte, error) {
 	if len(data) < 2 {
 		return nil, fmt.Errorf("batch frame too short: %d bytes", len(data))
 	}

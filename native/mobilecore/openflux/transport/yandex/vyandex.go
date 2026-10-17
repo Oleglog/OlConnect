@@ -1,4 +1,4 @@
-package yandex
+﻿package yandex
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 

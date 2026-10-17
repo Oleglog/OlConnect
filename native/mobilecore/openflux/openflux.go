@@ -6,12 +6,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/avito"
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/bitrix24"
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/cupsonline"
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/mailru"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/avito"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/bitrix24"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/cupsonline"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/mailru"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/yandex"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/yandex"
 )
 
 var (
@@ -44,7 +45,7 @@ func SetCodec(codec string) {
 type packetClient struct {
 	mu        sync.Mutex
 	running   bool
-	transport Transport
+	transport transport.Transport
 	packets   [][]byte
 	logs      []string
 }
@@ -56,6 +57,30 @@ func appendLog(message string) {
 	if len(client.logs) > 500 {
 		client.logs = append([]string(nil), client.logs[len(client.logs)-500:]...)
 	}
+}
+
+func detectTransport(docURL string) string {
+	if strings.Contains(docURL, "mail.ru") {
+		return "mailru"
+	}
+	if strings.Contains(docURL, "avito.ru") {
+		return "avito"
+	}
+	if strings.Contains(docURL, "cups.online") {
+		return "cupsonline"
+	}
+	if strings.Contains(docURL, "telemost.yandex.ru") {
+		return "telemost"
+	}
+	if strings.Contains(docURL, "bitrix24") {
+		return "bitrix24"
+	}
+
+	// Volga is strictly used on /edit/d/ documents
+	if strings.Contains(docURL, "/edit/d/") {
+		return "vyandex"
+	}
+	return "yandex"
 }
 
 func Start(documentURL string, transportType string) string {
@@ -83,13 +108,13 @@ func Start(documentURL string, transportType string) string {
 	utils.EnableDebug()
 	utils.SetLogSink(appendLog)
 
-	config := DefaultTransportConfig()
+	config := transport.DefaultConfig()
 	detected := transportType
 	if detected == "" || detected == "auto" {
 		detected = detectTransport(documentURL)
 	}
 
-	var innerTrans Transport
+	var innerTrans transport.Transport
 	switch detected {
 	case "mailru":
 		appendLog("[ANDROID] Запуск транспорта Mail.ru Docs")
@@ -117,9 +142,14 @@ func Start(documentURL string, transportType string) string {
 	encKeyMu.Lock()
 	key := encryptionKey
 	encKeyMu.Unlock()
+	if envKey := os.Getenv("OPENFLUX_ENCRYPTION_KEY"); envKey != "" {
+		key = strings.TrimSpace(envKey)
+	} else if envKey := os.Getenv("OPENFLUX_KEY"); envKey != "" {
+		key = strings.TrimSpace(envKey)
+	}
 	if key != "" {
 		appendLog("[ANDROID] Включение сквозного шифрования AES-256-GCM")
-		encTrans, err := NewEncryptedTransport(innerTrans, key, documentURL, false)
+		encTrans, err := transport.NewEncryptedTransport(innerTrans, key, documentURL, false)
 		if err != nil {
 			appendLog(fmt.Sprintf("[ANDROID] Ошибка настройки шифрования: %v", err))
 			client.mu.Lock()
@@ -134,13 +164,13 @@ func Start(documentURL string, transportType string) string {
 	codec := currentCodec
 	codecMu.Unlock()
 
-	var trans Transport
-	if codec == "legacy" {
+	var trans transport.Transport
+	if codec == "legacy" || os.Getenv("OPENFLUX_CODEC") == "legacy" {
 		appendLog("[ANDROID] Использование legacy LZ4 кодека")
-		trans = newCompressedTransport(innerTrans)
+		trans = transport.NewCompressedTransport(innerTrans)
 	} else {
 		appendLog("[ANDROID] Использование batched+zstd кодека")
-		trans = NewBatchedTransport(innerTrans)
+		trans = transport.NewBatchedTransport(innerTrans)
 	}
 	trans.Receive(func(data []byte) {
 		packet := append([]byte(nil), data...)

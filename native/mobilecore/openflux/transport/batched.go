@@ -1,4 +1,4 @@
-package openflux
+﻿package transport
 
 import (
 	"fmt"
@@ -7,10 +7,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 
-// Defaults for the coalescing layer. Tunable at runtime via env vars
-// (OPENFLUX_BATCH_BYTES / OPENFLUX_BATCH_COUNT / OPENFLUX_BATCH_LINGER_MS).
+// Defaults for the coalescing layer. Tunable at runtime via env vars so the
+// batch size can be matched to the channel's per-message limits without a
+// rebuild (OPENFLUX_BATCH_BYTES / OPENFLUX_BATCH_COUNT / OPENFLUX_BATCH_LINGER_MS).
 const (
 	defaultMaxBatchBytes = 8192
 	defaultMaxBatchCount = 64
@@ -18,8 +21,12 @@ const (
 	batchQueueDepth      = 4096
 )
 
-// BatchedTransport queues outgoing tunnel packets, coalesces bursts into a single
-// framed+zstd batch per inner transport message, and splits batches back into packets on receive.
+// BatchedTransport replaces the old per-packet CompressedTransport. It queues
+// outgoing tunnel packets, coalesces bursts into a single framed+zstd batch per
+// inner transport message, and splits batches back into packets on receive.
+//
+// This is the symmetric layer: client and exit node must both use it (they do,
+// because main.go wraps both the same way).
 type BatchedTransport struct {
 	Transport
 
@@ -28,9 +35,7 @@ type BatchedTransport struct {
 	maxBatchBytes int
 	maxBatchCount int
 
-	running  atomic.Bool
-	stopChan chan struct{}
-	stopOnce sync.Once
+	running atomic.Bool
 
 	mu     sync.RWMutex
 	userCb func([]byte)
@@ -49,7 +54,6 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 	return &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
-		stopChan:      make(chan struct{}),
 		lingerMs:      envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
 		maxBatchBytes: envInt("OPENFLUX_BATCH_BYTES", defaultMaxBatchBytes),
 		maxBatchCount: envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount),
@@ -67,13 +71,12 @@ func (b *BatchedTransport) Start() error {
 
 func (b *BatchedTransport) Stop() error {
 	b.running.Store(false)
-	b.stopOnce.Do(func() {
-		close(b.stopChan)
-	})
 	return b.Transport.Stop()
 }
 
-// Send copies the packet and enqueues it for batching.
+// Send copies the packet (the caller's buffer is reused by gVisor) and enqueues
+// it for batching. A full queue drops the packet; the tunnel's TCP will
+// retransmit, same as the old "write queue full" behavior.
 func (b *BatchedTransport) Send(data []byte) error {
 	p := make([]byte, len(data))
 	copy(p, data)
@@ -114,9 +117,9 @@ func (b *BatchedTransport) Receive(callback func([]byte)) {
 			return
 		}
 
-		pkts, err := decodeFramedBatch(data)
+		pkts, err := decodeBatch(data)
 		if err != nil {
-			Debugf("[BATCH] decode error (%d bytes): %v", len(data), err)
+			utils.Debugf("[BATCH] decode error (%d bytes): %v", len(data), err)
 			return
 		}
 		b.mu.RLock()
@@ -133,29 +136,21 @@ func (b *BatchedTransport) Receive(callback func([]byte)) {
 
 func (b *BatchedTransport) flushLoop() {
 	for b.running.Load() {
-		var first []byte
-		var ok bool
-		select {
-		case <-b.stopChan:
+		first, ok := <-b.queue
+		if !ok {
 			return
-		case first, ok = <-b.queue:
-			if !ok {
-				return
-			}
 		}
-
 		batch := [][]byte{first}
 		size := 2 + len(first)
 
-		// Phase 1: absorb everything already queued (burst coalescing).
+		// Phase 1: absorb everything already queued (burst coalescing). This
+		// alone collapses a window's worth of segments into one message.
 	drainNow:
 		for size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
 			select {
-			case <-b.stopChan:
-				return
 			case p, ok := <-b.queue:
 				if !ok {
-					_ = b.Transport.Send(encodeFramedBatch(batch))
+					b.Transport.Send(encodeBatch(batch))
 					return
 				}
 				batch = append(batch, p)
@@ -165,19 +160,18 @@ func (b *BatchedTransport) flushLoop() {
 			}
 		}
 
-		// Phase 2: brief linger to catch stragglers arriving just after the burst.
+		// Phase 2: brief linger to catch stragglers arriving just after the
+		// burst. Negligible next to the channel RTT, but it fills batches
+		// during steady bulk transfer.
 		if b.lingerMs > 0 && size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
 			timer := time.NewTimer(time.Duration(b.lingerMs) * time.Millisecond)
 		linger:
 			for size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
 				select {
-				case <-b.stopChan:
-					timer.Stop()
-					return
 				case p, ok := <-b.queue:
 					if !ok {
 						timer.Stop()
-						_ = b.Transport.Send(encodeFramedBatch(batch))
+						b.Transport.Send(encodeBatch(batch))
 						return
 					}
 					batch = append(batch, p)
@@ -189,6 +183,6 @@ func (b *BatchedTransport) flushLoop() {
 			timer.Stop()
 		}
 
-		_ = b.Transport.Send(encodeFramedBatch(batch))
+		b.Transport.Send(encodeBatch(batch))
 	}
 }

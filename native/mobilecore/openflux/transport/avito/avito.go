@@ -1,4 +1,4 @@
-package avito
+﻿package avito
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 

@@ -1,4 +1,4 @@
-package yandex
+﻿package yandex
 
 import (
 	"encoding/binary"
@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 

@@ -1,4 +1,4 @@
-package openflux
+package transport
 
 import (
 	"crypto/aes"
@@ -21,6 +21,17 @@ const (
 
 var encryptedMagic = [3]byte{'O', 'F', 'X'}
 
+// EncryptedTransport wraps another Transport with end-to-end AES-256-GCM
+// authenticated encryption, so the transport's own provider only ever
+// observes ciphertext. Keys are derived from a shared secret via scrypt; the
+// context string is just a public, per-session KDF salt - secrecy comes
+// exclusively from the secret, which both peers must share out of band.
+//
+// Each direction (client->exit, exit->client) uses its own derived key, so a
+// compromise of one direction's traffic does not help decrypt the other.
+// Every packet also carries a random nonce and is checked against a bounded
+// replay window, so a captured packet cannot be replayed back at either
+// peer.
 type EncryptedTransport struct {
 	Transport
 	sendAEAD      cipher.AEAD
@@ -32,6 +43,10 @@ type EncryptedTransport struct {
 	seenOrder     []string
 }
 
+// NewEncryptedTransport wraps inner with a directional AES-256-GCM stream.
+// Both peers must be configured with the same secret and context, and
+// exactly one of them must set exitNode=true so the two sides pick opposite
+// send/receive key pairs.
 func NewEncryptedTransport(inner Transport, secret, context string, exitNode bool) (*EncryptedTransport, error) {
 	if inner == nil {
 		return nil, errors.New("inner transport is nil")

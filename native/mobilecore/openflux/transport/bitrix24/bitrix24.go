@@ -1,4 +1,4 @@
-// Package bitrix24 implements a transport that tunnels data through Bitrix24
+﻿// Package bitrix24 implements a transport that tunnels data through Bitrix24
 // chat messages. Each side writes base64-encoded frames as chat messages and
 // polls the other side's messages to read them back. The domain *.bitrix24.ru
 // sits in every Russian ISP's whitelist, so it is practically unblockable.
@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 

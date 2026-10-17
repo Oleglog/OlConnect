@@ -1,4 +1,4 @@
-// Package mailru implements a transport that tunnels packets through
+﻿// Package mailru implements a transport that tunnels packets through
 // Mail.ru's cloud document editor (docs.datacloudmail.ru), the same
 // coauthoring backend family as Yandex.Docs. Two peers open the same
 // public document and smuggle packets through the "cursor" field of the
@@ -25,7 +25,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 

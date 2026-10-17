@@ -1,4 +1,4 @@
-package cupsonline
+﻿package cupsonline
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 
@@ -394,13 +394,6 @@ func parseRoomList(rawURL string) []string {
 			}
 		} else if single := q.Get("room"); single != "" {
 			return []string{single}
-		}
-		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-		if len(parts) > 0 {
-			last := parts[len(parts)-1]
-			if len(last) == 36 && strings.Count(last, "-") == 4 {
-				return []string{last}
-			}
 		}
 	}
 	if ids, err := unpackRooms(rawURL); err == nil {

@@ -1,4 +1,4 @@
-// Package yandex: Telemost transport.
+﻿// Package yandex: Telemost transport.
 //
 // Tunnels packets through a Yandex Telemost conference: HTTP join gives
 // the signaling WS URL + room/peer/credentials; WS carries SDP/ICE; two
@@ -34,7 +34,7 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 

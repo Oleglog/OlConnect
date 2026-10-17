@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestNormalizeMailruWeblink(t *testing.T) {
+func TestNormalizeWeblink(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
@@ -26,9 +26,9 @@ func TestNormalizeMailruWeblink(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		actual := normalizeMailruWeblink(tc.input)
+		actual := normalizeWeblink(tc.input)
 		if actual != tc.expected {
-			t.Errorf("normalizeMailruWeblink(%q) = %q, expected %q", tc.input, actual, tc.expected)
+			t.Errorf("normalizeWeblink(%q) = %q, expected %q", tc.input, actual, tc.expected)
 		}
 	}
 }

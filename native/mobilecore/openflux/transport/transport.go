@@ -1,4 +1,4 @@
-package openflux
+package transport
 
 import (
 	"sync"
@@ -33,7 +33,7 @@ type TransportStats struct {
 	Uptime        time.Duration
 }
 
-func DefaultTransportConfig() TransportConfig {
+func DefaultConfig() TransportConfig {
 	return TransportConfig{
 		MaxReconnectAttempts: 999999,
 		ReconnectDelay:       0,
@@ -41,10 +41,6 @@ func DefaultTransportConfig() TransportConfig {
 		MaxQueueSize:         1024,
 		KeepAliveInterval:    10 * time.Second,
 	}
-}
-
-func DefaultConfig() TransportConfig {
-	return DefaultTransportConfig()
 }
 
 type BaseTransport struct {
@@ -59,6 +55,8 @@ type BaseTransport struct {
 
 	reconnectAttempts atomic.Int32
 
+	// done is closed by Stop. Subclasses can select on Done() to
+	// interrupt sleeps and backoff loops.
 	done     chan struct{}
 	doneOnce sync.Once
 }
@@ -88,20 +86,17 @@ func (b *BaseTransport) Stop() error {
 	return nil
 }
 
+// Done returns a channel that closes when the transport is stopped.
+// Subclasses and callers can select on it to interrupt sleeps.
 func (b *BaseTransport) Done() <-chan struct{} {
 	b.Mu.RLock()
 	d := b.done
 	b.Mu.RUnlock()
 	if d == nil {
+		// Never started; return a channel that blocks forever.
 		return make(chan struct{})
 	}
 	return d
-}
-
-func (b *BaseTransport) GetReceiveCallback() func([]byte) {
-	b.Mu.RLock()
-	defer b.Mu.RUnlock()
-	return b.receiveCallback
 }
 
 func (b *BaseTransport) IsRunning() bool {
@@ -130,16 +125,18 @@ func (b *BaseTransport) CallReceive(data []byte) {
 	b.Mu.RLock()
 	cb := b.receiveCallback
 	b.Mu.RUnlock()
-
 	if cb != nil {
 		cb(data)
 	}
 }
 
-func (b *BaseTransport) Stats() TransportStats {
+func (b *BaseTransport) GetSession(accessor func(interface{})) {
 	b.Mu.RLock()
 	defer b.Mu.RUnlock()
+	// This is a helper for subclasses
+}
 
+func (b *BaseTransport) Stats() TransportStats {
 	return TransportStats{
 		BytesSent:     atomic.LoadUint64(&b.stats.BytesSent),
 		BytesReceived: atomic.LoadUint64(&b.stats.BytesReceived),
@@ -167,37 +164,4 @@ func (b *BaseTransport) RecordReconnect() {
 
 func (b *BaseTransport) GetConfig() TransportConfig {
 	return b.config
-}
-
-func (b *BaseTransport) AddSentBytes(n int) {
-	b.RecordSend(n)
-}
-
-func (b *BaseTransport) AddRecvBytes(n int) {
-	b.RecordReceive(n)
-}
-
-func (b *BaseTransport) AddReconnect() {
-	b.RecordReconnect()
-}
-
-func (b *BaseTransport) GetReconnectDelay() time.Duration {
-	attempts := b.reconnectAttempts.Add(1)
-	if attempts == 1 {
-		return b.config.ReconnectDelay
-	}
-
-	delay := float64(b.config.ReconnectDelay)
-	for i := int32(1); i < attempts; i++ {
-		delay *= b.config.ReconnectMultiplier
-		if delay > float64(30*time.Second) {
-			delay = float64(30 * time.Second)
-			break
-		}
-	}
-	return time.Duration(delay)
-}
-
-func (b *BaseTransport) ResetReconnectAttempts() {
-	b.reconnectAttempts.Store(0)
 }
