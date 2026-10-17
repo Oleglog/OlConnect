@@ -1,4 +1,4 @@
-﻿// Package mailru implements a transport that tunnels packets through
+// Package mailru implements a transport that tunnels packets through
 // Mail.ru's cloud document editor (docs.datacloudmail.ru), the same
 // coauthoring backend family as Yandex.Docs. Two peers open the same
 // public document and smuggle packets through the "cursor" field of the
@@ -291,17 +291,35 @@ func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *M
 
 func normalizeWeblink(weblink string) string {
 	weblink = strings.TrimSpace(weblink)
+	if idx := strings.IndexAny(weblink, "?#"); idx != -1 {
+		weblink = weblink[:idx]
+	}
 	for _, prefix := range []string{
 		"https://cloud.mail.ru/public/",
 		"http://cloud.mail.ru/public/",
 		"https://cloud.mail.ru/",
 		"http://cloud.mail.ru/",
+		"https://docs.mail.ru/public/",
+		"http://docs.mail.ru/public/",
+		"https://docs.mail.ru/d/",
+		"http://docs.mail.ru/d/",
+		"https://docs.mail.ru/",
+		"http://docs.mail.ru/",
+		"https://doc.mail.ru/public/",
+		"http://doc.mail.ru/public/",
+		"https://doc.mail.ru/d/",
+		"http://doc.mail.ru/d/",
+		"https://doc.mail.ru/",
+		"http://doc.mail.ru/",
+		"/public/",
+		"public/",
 	} {
 		if strings.HasPrefix(weblink, prefix) {
-			return strings.Trim(strings.TrimPrefix(weblink, prefix), "/")
+			weblink = strings.TrimPrefix(weblink, prefix)
+			break
 		}
 	}
-	return weblink
+	return strings.Trim(weblink, "/")
 }
 
 func (t *MailruDocsTransport) Start() error {

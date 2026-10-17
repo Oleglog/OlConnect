@@ -1,6 +1,7 @@
 package yandex
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -23,8 +24,8 @@ func serveConfig(t *testing.T, body string) string {
 	return srv.URL
 }
 
-// A "volga" client-config carries no balancer_url; the request must fail with an
-// error instead of panicking.
+// A "volga" client-config carries no balancer_url; the request must report ErrVolgaDetected
+// so YandexDocsTransport can auto-delegate to Volga.
 func TestFetchDocInfoVolgaConfigReturnsError(t *testing.T) {
 	config := `{"officeActionData":{"officeType":"volga","editor_config":{"type":"desktop",` +
 		`"document":{"key":"volgaDocKey","fileType":"docx","url":"http://localhost:12701/disk/x",` +
@@ -36,8 +37,8 @@ func TestFetchDocInfoVolgaConfigReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected an error for a config without balancer_url, got info %+v", info)
 	}
-	if !strings.Contains(err.Error(), "balancer_url") {
-		t.Errorf("error should name the missing field, got: %v", err)
+	if !errors.Is(err, ErrVolgaDetected) && !strings.Contains(err.Error(), "balancer_url") {
+		t.Errorf("error should be ErrVolgaDetected or name balancer_url, got: %v", err)
 	}
 }
 
