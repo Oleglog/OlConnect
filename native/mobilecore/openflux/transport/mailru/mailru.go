@@ -1442,6 +1442,7 @@ func (t *MailruDocsTransport) LoadCookieFile(path string) error {
 	if err := loadMailruCookies(path, jar); err != nil {
 		return err
 	}
+	t.hasCookies.Store(true)
 	utils.Debugf("[M-DOCS] cookie file loaded from %s", path)
 	if t.IsConnected() && t.IsRunning() {
 		t.Mu.Lock()

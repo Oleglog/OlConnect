@@ -1389,6 +1389,16 @@ func (t *CupsonlineTransport) Receive(callback func([]byte)) {
 	t.BaseTransport.Receive(callback)
 }
 
+// cupsPreferredBatchBytes sizes the upper coalescing layer's batches to the
+// inner batcher: a codec frame arrives here whole (up to ~8 KB after zstd)
+// and Send pins it to one room, so the upper batch should hold several frames
+// — enough that round-robin spreads them over all 4 rooms, small enough to
+// stay under BatchMaxBytes (22 KB) once framed. OPENFLUX_BATCH_BYTES overrides.
+const cupsPreferredBatchBytes = 16_000
+
+// PreferredBatchBytes implements transport.BatchSizeHinter.
+func (t *CupsonlineTransport) PreferredBatchBytes() int { return cupsPreferredBatchBytes }
+
 // IsConnected is true while at least one room's channel is up, so the app
 // stops claiming "connected" once every room has gone away.
 func (t *CupsonlineTransport) IsConnected() bool {

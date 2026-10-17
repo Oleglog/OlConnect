@@ -119,7 +119,20 @@ internal object ProfileEditorDialog {
         profile: OlcrtcProfile,
     ): () -> ProfileConfig {
         val name = field(fragment, form, R.string.profile_field_name, profile.name)
-        val provider = choice(fragment, form, R.string.profile_field_provider, OlcrtcProfile.Provider.entries, profile.provider)
+        val provider = choice(
+            fragment,
+            form,
+            R.string.profile_field_provider,
+            OlcrtcProfile.Provider.entries,
+            profile.provider,
+            labels = {
+                when (it) {
+                    OlcrtcProfile.Provider.WBSTREAM -> "WBStream (VP8-канал)"
+                    OlcrtcProfile.Provider.TELEMOST -> "Телемост (VP8-канал, legacy)"
+                    OlcrtcProfile.Provider.JITSI -> "Jitsi (data-канал)"
+                }
+            },
+        )
         // Issue #52: only the transports supported by the chosen provider are
         // selectable (single option today, but filtered so saving cannot fail).
         val transport = choice(
@@ -212,7 +225,7 @@ internal object ProfileEditorDialog {
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.VYANDEX -> "Яндекс Документы (Волга)"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.YANDEX -> "Яндекс Документы (Классический)"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.MAILRU -> "Mail.ru Документы"
-                    io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.TELEMOST -> "Яндекс Телемост"
+                    io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.TELEMOST -> "Яндекс Телемост (OpenFlux, ссылка на встречу)"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.CUPSONLINE -> "ЧУПС Онлайн (cups.online)"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.BITRIX24 -> "Битрикс24"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.AVITO -> "Авито"

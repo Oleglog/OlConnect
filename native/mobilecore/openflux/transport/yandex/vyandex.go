@@ -1306,6 +1306,16 @@ func (t *YandexVolgaTransport) Receive(callback func([]byte)) {
 	t.onDataMu.Unlock()
 }
 
+// volgaPreferredBatchBytes sizes the upper coalescing layer's batches for the
+// relay channel: the inner relay worker already coalesces up to BatchSize
+// packets / BatchMaxBytes per op, so the upper batch just needs to be big
+// enough to feed it full relay ops (base64 inflates ~33%) without spraying
+// every TCP segment as its own op. OPENFLUX_BATCH_BYTES overrides.
+const volgaPreferredBatchBytes = 256 * 1024
+
+// PreferredBatchBytes implements transport.BatchSizeHinter.
+func (t *YandexVolgaTransport) PreferredBatchBytes() int { return volgaPreferredBatchBytes }
+
 func (t *YandexVolgaTransport) IsConnected() bool {
 	return t.BaseTransport.IsConnected()
 }
