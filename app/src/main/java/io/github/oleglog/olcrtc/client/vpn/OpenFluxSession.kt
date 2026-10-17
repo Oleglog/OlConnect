@@ -21,6 +21,7 @@ internal class OpenFluxSession(
     private val dnsServer: String,
     private val establishTun: () -> ParcelFileDescriptor,
     private val isPacketAllowed: ((packet: ByteArray) -> Boolean)? = null,
+    private val socketProtector: ((java.net.DatagramSocket) -> Unit)? = null,
     private val onFail: (String) -> Unit = {},
     private val onLog: (String) -> Unit = {},
 ) : VpnTunnelSession {
@@ -150,23 +151,13 @@ internal class OpenFluxSession(
                             forwardDns(out, packet, dns)
                         }
                     }
-                } else if (isIpv4Tcp(packet)) {
+                } else if (isIpv4Tcp(packet) || isIpv4Udp(packet)) {
                     val sendErr = Mobilecore.sendOpenFlux(packet)
                     if (sendErr.isNullOrEmpty()) {
                         pktsUp.incrementAndGet()
                         bytesUp.addAndGet(packet.size.toLong())
                     } else {
                         onLog("OpenFlux send error: $sendErr")
-                    }
-                } else if (isIpv4Udp(packet)) {
-                    executeWorker {
-                        val out = synchronized(outputLock) { tunnelOutput }
-                        if (out != null && !closed.get()) {
-                            val icmp = buildIcmpPortUnreachable(packet)
-                            if (icmp.isNotEmpty()) {
-                                inject(out, icmp)
-                            }
-                        }
                     }
                 }
             }
@@ -221,71 +212,38 @@ internal class OpenFluxSession(
         if (dnsOffset > request.size || udpLength < 8 || ipHeader + udpLength > request.size) return
 
         val query = Arrays.copyOfRange(request, dnsOffset, ipHeader + udpLength)
-        try {
-            val answer = queryDnsOverHttps(query, dns)
-            inject(output, buildDnsResponse(request, answer))
-        } catch (_: Exception) {
-            // DNS resolution failure
+        val answer = queryDnsUdp(query, dns)
+        if (answer != null && answer.isNotEmpty()) {
+            val response = buildDnsResponse(request, answer)
+            if (response.isNotEmpty()) {
+                inject(output, response)
+                return
+            }
+        }
+        // Fallback: send the raw DNS query packet through OpenFlux tunnel (exit node handles UDP NAT)
+        val sendErr = Mobilecore.sendOpenFlux(request)
+        if (sendErr.isNullOrEmpty()) {
+            pktsUp.incrementAndGet()
+            bytesUp.addAndGet(request.size.toLong())
         }
     }
 
-    private fun queryDnsOverHttps(query: ByteArray, dns: String): ByteArray {
-        val endpoints = mutableListOf<String>()
-        when (dns) {
-            "77.88.8.8", "77.88.8.1" -> {
-                endpoints.add("https://common.dot.yandex.net/dns-query")
-                endpoints.add("https://dns.google/dns-query")
+    private fun queryDnsUdp(query: ByteArray, dnsServer: String): ByteArray? {
+        val targetIp = if (dnsServer.isNotBlank()) dnsServer.trim() else "77.88.8.8"
+        return try {
+            java.net.DatagramSocket().use { socket ->
+                socketProtector?.invoke(socket)
+                socket.soTimeout = 2500
+                val addr = java.net.InetAddress.getByName(targetIp)
+                socket.send(java.net.DatagramPacket(query, query.size, addr, 53))
+                val buffer = ByteArray(4096)
+                val response = java.net.DatagramPacket(buffer, buffer.size)
+                socket.receive(response)
+                Arrays.copyOf(buffer, response.length)
             }
-            "8.8.8.8", "8.8.4.4" -> {
-                endpoints.add("https://dns.google/dns-query")
-                endpoints.add("https://common.dot.yandex.net/dns-query")
-            }
-            "9.9.9.9", "149.112.112.112" -> {
-                endpoints.add("https://dns.9.9.9.9/dns-query")
-                endpoints.add("https://common.dot.yandex.net/dns-query")
-            }
-            else -> {
-                // In Russia, cloudflare-dns.com (1.1.1.1) is blocked by TSPU.
-                // Prioritize Yandex DoH, then Google, then Cloudflare.
-                endpoints.add("https://common.dot.yandex.net/dns-query")
-                endpoints.add("https://dns.google/dns-query")
-                endpoints.add("https://cloudflare-dns.com/dns-query")
-            }
+        } catch (_: Exception) {
+            null
         }
-
-        var lastException: Exception? = null
-        for (endpoint in endpoints) {
-            var conn: HttpURLConnection? = null
-            try {
-                conn = URL(endpoint).openConnection() as HttpURLConnection
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Accept", "application/dns-message")
-                conn.setRequestProperty("Content-Type", "application/dns-message")
-                conn.doOutput = true
-                conn.setFixedLengthStreamingMode(query.size)
-                conn.outputStream.use { it.write(query) }
-                val statusCode = conn.responseCode
-                if (statusCode != HttpURLConnection.HTTP_OK) {
-                    throw IOException("DoH returned HTTP $statusCode from $endpoint")
-                }
-                val input: InputStream = conn.inputStream
-                val output = ByteArrayOutputStream()
-                val buf = ByteArray(2048)
-                var read: Int
-                while (input.read(buf).also { read = it } != -1) {
-                    output.write(buf, 0, read)
-                    if (output.size() > 65535) throw IOException("DNS response too large")
-                }
-                return output.toByteArray()
-            } catch (e: Exception) {
-                lastException = e
-            } finally {
-                runCatching { conn?.disconnect() }
-            }
-        }
-        throw lastException ?: IOException("All DoH endpoints failed")
     }
 
     private fun inject(output: FileOutputStream, packet: ByteArray) {

@@ -1039,6 +1039,7 @@ class OlcrtcVpnService : VpnService() {
                 dnsServer = dnsIp,
                 establishTun = { establishOpenFluxTun(dnsIp) },
                 isPacketAllowed = { packet -> isPacketAllowedForPerApp(packet) },
+                socketProtector = { socket -> protect(socket) },
                 onFail = { error ->
                     diagnostics.append("error", "OpenFlux error: $error")
                     commands.execute {
