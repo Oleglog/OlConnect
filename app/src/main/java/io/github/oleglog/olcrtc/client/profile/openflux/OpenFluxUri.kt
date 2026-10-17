@@ -36,6 +36,7 @@ internal object OpenFluxUri {
     }
 
     fun serialize(profile: OpenFluxProfile): String {
+        val encodedUrl = encode(profile.documentUrl)
         val host = when (profile.transport) {
             OpenFluxProfile.Transport.MAILRU -> "mailru"
             OpenFluxProfile.Transport.TELEMOST -> "telemost"
