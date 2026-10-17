@@ -1,4 +1,4 @@
-﻿package openflux
+package yandex
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,7 +21,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-		)
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
+)
 
 type VolgaConfig struct {
 	MaxIdleConnsPerHost int
@@ -45,6 +48,14 @@ type VolgaConfig struct {
 	WSHandshakeTimeout time.Duration
 	WSReadTimeout      time.Duration
 	KeepAliveInterval  time.Duration
+	// MaxSessionAge rotates the WebSocket (and its authorization) even
+	// while it looks healthy; 0 disables rotation.
+	MaxSessionAge time.Duration
+
+	// WebSocket buffers. Large ones help a server; a phone's VPN process
+	// (iOS caps it at 50 MB) cannot afford them.
+	WSReadBufferSize  int
+	WSWriteBufferSize int
 }
 
 func DefaultVolgaConfig() VolgaConfig {
@@ -71,7 +82,27 @@ func DefaultVolgaConfig() VolgaConfig {
 		WSHandshakeTimeout: 10 * time.Second,
 		WSReadTimeout:      60 * time.Second,
 		KeepAliveInterval:  10 * time.Second,
+		MaxSessionAge:      30 * time.Minute,
+
+		WSReadBufferSize:  4 << 20,
+		WSWriteBufferSize: 4 << 20,
 	}
+}
+
+// SlimVolgaConfig is the memory-constrained profile for phones, above all
+// the iOS Network Extension (50 MB for the whole process): a small relay
+// worker pool and queue, smaller batches and WebSocket buffers. The wire
+// format is the same, so it talks to a node on the default profile.
+func SlimVolgaConfig() VolgaConfig {
+	c := DefaultVolgaConfig()
+	c.MaxIdleConnsPerHost = 8
+	c.MaxIdleConns = 16
+	c.WorkerCount = 4
+	c.QueueSize = 4096
+	c.BatchMaxBytes = 256 * 1024
+	c.WSReadBufferSize = 128 << 10
+	c.WSWriteBufferSize = 128 << 10
+	return c
 }
 
 const volgaUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
@@ -80,7 +111,9 @@ var reClientConfig = regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*
 
 var (
 	b64BufPool = sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 16*1024*1024) },
+		// base64Encode grows a buffer for a bigger batch; a 16 MiB default
+		// kept that much per pooled buffer alive for every small packet.
+		New: func() interface{} { return make([]byte, 0, 256*1024) },
 	}
 	jsonBufPool = sync.Pool{
 		New: func() interface{} { return bytes.NewBuffer(make([]byte, 0, 128*1024)) },
@@ -105,17 +138,21 @@ func base64Encode(data []byte) string {
 }
 
 type VolgaStats struct {
-	PacketsSent    atomic.Uint64
-	PacketsRecv    atomic.Uint64
-	BytesSent      atomic.Uint64
-	BytesReceived  atomic.Uint64
-	HTTPReqsSent   atomic.Uint64
-	HTTPReqsFailed atomic.Uint64
-	WSReconnects   atomic.Uint64
-	QueueDrops     atomic.Uint64
-	WorkerBusy     atomic.Int64
-	BatchesSent    atomic.Uint64
-	PacketsBatched atomic.Uint64
+	PacketsSent atomic.Uint64
+	PacketsRecv atomic.Uint64
+	// User packets only (not the 1-byte keepalives): what the stall
+	// detector compares.
+	DataPacketsQueued atomic.Uint64
+	DataPacketsRecv   atomic.Uint64
+	BytesSent         atomic.Uint64
+	BytesReceived     atomic.Uint64
+	HTTPReqsSent      atomic.Uint64
+	HTTPReqsFailed    atomic.Uint64
+	WSReconnects      atomic.Uint64
+	QueueDrops        atomic.Uint64
+	WorkerBusy        atomic.Int64
+	BatchesSent       atomic.Uint64
+	PacketsBatched    atomic.Uint64
 }
 
 type volgaAuth struct {
@@ -130,21 +167,26 @@ type volgaAuth struct {
 	Sign        string
 	TS          string
 	SessionID   string
-	Cookies     []*http.Cookie
+	// Action is editorParams.action: "edit" when this session may write to
+	// the document, which both peers need.
+	Action  string
+	Cookies []*http.Cookie
 }
 
-func authorize(docURL string) (*volgaAuth, error) {
-	Debugf("[VOLGA] authorize(%s)", docURL)
+func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
+	utils.Debugf("[VOLGA] authorize(%s)", docURL)
 
-	jar, _ := cookiejar.New(nil)
+	if jar == nil {
+		jar, _ = cookiejar.New(nil)
+	}
+	tr := carrierTransport().Clone()
+	tr.MaxIdleConns = 100
+	tr.MaxIdleConnsPerHost = 100
+	tr.IdleConnTimeout = 90 * time.Second
 	session := &http.Client{
-		Jar: jar,
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 100,
-			IdleConnTimeout:     90 * time.Second,
-		},
-		Timeout: 30 * time.Second,
+		Jar:       jar,
+		Transport: tr,
+		Timeout:   30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -154,7 +196,7 @@ func authorize(docURL string) (*volgaAuth, error) {
 	var finalURL string
 	currentURL := docURL
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 15; i++ {
 		req, _ := http.NewRequest("GET", currentURL, nil)
 		req.Header.Set("User-Agent", volgaUserAgent)
 		req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
@@ -170,13 +212,57 @@ func authorize(docURL string) (*volgaAuth, error) {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		Debugf("[VOLGA] GET %s -> %d (%d bytes)", currentURL, resp.StatusCode, len(body))
+		utils.Debugf("[VOLGA] GET %s -> %d (%d bytes)", currentURL, resp.StatusCode, len(body))
+
+		if resp.StatusCode == 200 {
+			isCaptcha := resp.Header.Get("x-yandex-captcha") == "captcha" ||
+				bytes.Contains(body, []byte("window.__SSR_DATA__")) ||
+				bytes.Contains(body, []byte("checkbox-captcha-form")) ||
+				bytes.Contains(body, []byte("tmgrdfrend-form")) ||
+				bytes.Contains(body, []byte("Вы не робот?"))
+
+			if isCaptcha {
+				utils.Debugf("[VOLGA] captcha HTML detected in 200 OK from %s, solving...", currentURL)
+				nextURL, cerr := solveCaptchaHTML(string(body), currentURL, jar, volgaUserAgent)
+				if cerr != nil {
+					return nil, fmt.Errorf("captcha solve 200 OK: %w", cerr)
+				}
+				utils.Debugf("[VOLGA] captcha solved, redirecting to %s", nextURL)
+				currentURL = nextURL
+				continue
+			}
+
+			finalBody = body
+			finalURL = currentURL
+			break
+		}
 
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			loc := resp.Header.Get("Location")
 			if loc == "" {
 				return nil, fmt.Errorf("redirect without Location from %s", currentURL)
 			}
+
+			if strings.Contains(loc, "passport.yandex") {
+				return nil, ErrLoginRequired
+			}
+
+			if strings.Contains(loc, "showcaptcha") || strings.Contains(loc, "showcaptchafast") {
+				utils.Debugf("[VOLGA] captcha required at %s, solving...", loc)
+				targetCaptchaURL := loc
+				if strings.HasPrefix(targetCaptchaURL, "/") {
+					u, _ := url.Parse(currentURL)
+					targetCaptchaURL = u.Scheme + "://" + u.Host + targetCaptchaURL
+				}
+				nextURL, cerr := solveCaptcha(targetCaptchaURL, jar, volgaUserAgent)
+				if cerr != nil {
+					return nil, fmt.Errorf("captcha solve: %w", cerr)
+				}
+				utils.Debugf("[VOLGA] captcha solved, retrying from %s", nextURL)
+				currentURL = nextURL
+				continue
+			}
+
 			if strings.HasPrefix(loc, "/") {
 				u, _ := url.Parse(currentURL)
 				loc = u.Scheme + "://" + u.Host + loc
@@ -185,16 +271,14 @@ func authorize(docURL string) (*volgaAuth, error) {
 			continue
 		}
 
-		finalBody = body
-		finalURL = currentURL
-		break
+		return nil, fmt.Errorf("unexpected status %d at %s", resp.StatusCode, currentURL)
 	}
 
 	if finalBody == nil {
 		return nil, fmt.Errorf("too many redirects from %s", docURL)
 	}
 
-	Debugf("[VOLGA] final URL: %s", finalURL)
+	utils.Debugf("[VOLGA] final URL: %s", finalURL)
 
 	m := reClientConfig.FindSubmatch(finalBody)
 	if len(m) < 2 {
@@ -202,7 +286,7 @@ func authorize(docURL string) (*volgaAuth, error) {
 		if len(preview) > 3000 {
 			preview = preview[:3000]
 		}
-		Debugf("[VOLGA] HTML preview: %s", preview)
+		utils.Debugf("[VOLGA] HTML preview: %s", preview)
 		return nil, fmt.Errorf("client-config not found in %s", finalURL)
 	}
 
@@ -213,7 +297,7 @@ func authorize(docURL string) (*volgaAuth, error) {
 		return nil, fmt.Errorf("parse client-config: %w", err)
 	}
 
-	Debugf("[VOLGA] client-config keys: %v", mapKeys(cfg))
+	utils.Debugf("[VOLGA] client-config keys: %v", mapKeys(cfg))
 
 	office, _ := cfg["officeActionData"].(map[string]interface{})
 	editor, _ := cfg["editorParams"].(map[string]interface{})
@@ -222,21 +306,22 @@ func authorize(docURL string) (*volgaAuth, error) {
 		return nil, fmt.Errorf("officeActionData missing (keys: %v)", mapKeys(cfg))
 	}
 
-	Debugf("[VOLGA] office keys: %v", mapKeys(office))
+	utils.Debugf("[VOLGA] office keys: %v", mapKeys(office))
 
 	actionURL := getStr(office, "action_url")
 	accessToken := getStr(office, "access_token")
 	ttl := office["access_token_ttl"]
 
-	Debugf("[VOLGA] action_url: %s", actionURL)
-	Debugf("[VOLGA] access_token: %d bytes", len(accessToken))
-	Debugf("[VOLGA] access_token_ttl: %v (%T)", ttl, ttl)
+	utils.Debugf("[VOLGA] action_url: %s", actionURL)
+	utils.Debugf("[VOLGA] access_token: %d bytes", len(accessToken))
+	utils.Debugf("[VOLGA] access_token_ttl: %v (%T)", ttl, ttl)
 
 	a := &volgaAuth{
 		Session:     session,
 		AccessToken: accessToken,
 		ResourceURL: getStr(office, "resource_url"),
 		DocID:       getStr(editor, "idDoc"),
+		Action:      getStr(editor, "action"),
 	}
 
 	if actionURL == "" {
@@ -247,14 +332,14 @@ func authorize(docURL string) (*volgaAuth, error) {
 	}
 
 	ttlStr := formatTTL(ttl)
-	Debugf("[VOLGA] ttl formatted: %q", ttlStr)
+	utils.Debugf("[VOLGA] ttl formatted: %q", ttlStr)
 
 	form := url.Values{}
 	form.Set("access_token", a.AccessToken)
 	form.Set("access_token_ttl", ttlStr)
 	body := form.Encode()
 
-	Debugf("[VOLGA] POST %s (body %d bytes)", actionURL, len(body))
+	utils.Debugf("[VOLGA] POST %s (body %d bytes)", actionURL, len(body))
 
 	req2, _ := http.NewRequest("POST", actionURL, strings.NewReader(body))
 	req2.Header.Set("User-Agent", volgaUserAgent)
@@ -274,7 +359,7 @@ func authorize(docURL string) (*volgaAuth, error) {
 	}
 	resp2.Body.Close()
 
-	Debugf("[VOLGA] auth/initial -> %d", resp2.StatusCode)
+	utils.Debugf("[VOLGA] auth/initial -> %d", resp2.StatusCode)
 
 	if resp2.StatusCode != 302 {
 		return nil, fmt.Errorf("auth/initial status %d (expected 302)", resp2.StatusCode)
@@ -285,10 +370,10 @@ func authorize(docURL string) (*volgaAuth, error) {
 		return nil, fmt.Errorf("auth/initial no Location")
 	}
 
-	Debugf("[VOLGA] Location: %s", location[:minInt(len(location), 300)])
+	utils.Debugf("[VOLGA] Location: %s", location[:minInt(len(location), 300)])
 
 	if strings.Contains(location, "/document/error/") {
-		return nil, fmt.Errorf("auth/initial returned /document/error/ вЂ” check access_token_ttl and Referer")
+		return nil, fmt.Errorf("auth/initial returned /document/error/ — check access_token_ttl and Referer")
 	}
 
 	locParsed, err := url.Parse(location)
@@ -340,9 +425,31 @@ func authorize(docURL string) (*volgaAuth, error) {
 			a.Token != "", a.RequestPath != "", a.UserIDStr != "", a.Sign != "")
 	}
 
-	Debugf("[VOLGA] auth OK: user=%d(%s) rp=%s sign=%s ts=%s",
+	utils.Debugf("[VOLGA] auth OK: user=%d(%s) rp=%s sign=%s ts=%s",
 		a.UserID, a.UserIDStr, a.RequestPath, a.Sign, a.TS)
 	return a, nil
+}
+
+// VolgaDocument is what CheckVolgaDocument learned about a document.
+type VolgaDocument struct {
+	DocID    string
+	Editable bool
+}
+
+// CheckVolgaDocument runs the transport's own authorization against docURL
+// without joining the document, to tell whether the vyandex transport can
+// use it: the page must be the Volga editor and, for an anonymous visitor
+// (jar nil or empty), editable by anyone with the link. The first-tier PoW
+// captcha is solved like on a real connect; a SmartCaptcha or login wall
+// comes back as ErrCaptchaRequired / ErrLoginRequired.
+func CheckVolgaDocument(docURL string, jar http.CookieJar) (VolgaDocument, error) {
+	a, err := authorizeWithJar(docURL, jar)
+	if err != nil {
+		return VolgaDocument{}, err
+	}
+	// Older pages leave the action out; they only reach this point when
+	// the editor opened, so treat a missing one as editable.
+	return VolgaDocument{DocID: a.DocID, Editable: a.Action == "" || a.Action == "edit"}, nil
 }
 
 func getStr(m map[string]interface{}, key string) string {
@@ -420,7 +527,9 @@ func minInt(a, b int) int {
 }
 
 type relayClient struct {
-	auth   *volgaAuth
+	// auth is shared with the WebSocket listener, which publishes a fresh
+	// authorization on every reconnect; each request reads the current one.
+	auth   *atomic.Pointer[volgaAuth]
 	config VolgaConfig
 	stats  *VolgaStats
 
@@ -438,16 +547,23 @@ type relayClient struct {
 
 	mu       sync.Mutex
 	frontier string
+
+	// stopMu orders Send against Stop: Stop closes the queues, and a send
+	// on a closed channel panics even inside a select with a default.
+	// Manager.Stop stops every transport again after Session.Stop did, so
+	// Stop must also be safe to call twice.
+	stopMu   sync.RWMutex
+	stopped  bool
+	stopOnce sync.Once
 }
 
-func newRelayClient(auth *volgaAuth, cfg VolgaConfig, stats *VolgaStats) *relayClient {
-	tr := &http.Transport{
-		MaxIdleConns:        cfg.MaxIdleConns,
-		MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
-		IdleConnTimeout:     cfg.IdleConnTimeout,
-		DisableCompression:  true,
-		ForceAttemptHTTP2:   true,
-	}
+func newRelayClient(auth *atomic.Pointer[volgaAuth], cfg VolgaConfig, stats *VolgaStats) *relayClient {
+	tr := carrierTransport().Clone()
+	tr.MaxIdleConns = cfg.MaxIdleConns
+	tr.MaxIdleConnsPerHost = cfg.MaxIdleConnsPerHost
+	tr.IdleConnTimeout = cfg.IdleConnTimeout
+	tr.DisableCompression = true
+	tr.ForceAttemptHTTP2 = true
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -458,7 +574,6 @@ func newRelayClient(auth *volgaAuth, cfg VolgaConfig, stats *VolgaStats) *relayC
 		httpClient: &http.Client{
 			Transport: tr,
 			Timeout:   cfg.RelayTimeout,
-			Jar:       auth.Session.Jar,
 		},
 		workers:    cfg.WorkerCount,
 		queue:      make(chan []byte, cfg.QueueSize),
@@ -473,14 +588,19 @@ func (r *relayClient) Start() {
 		r.wg.Add(1)
 		go r.worker(i)
 	}
-	Debugf("[VOLGA] relay pool started: %d workers, batch=%d timeout=%v",
+	utils.Debugf("[VOLGA] relay pool started: %d workers, batch=%d timeout=%v",
 		r.workers, r.config.BatchSize, r.config.BatchTimeout)
 }
 
 func (r *relayClient) Stop() {
-	r.cancel()
-	close(r.queue)
-	close(r.batchQueue)
+	r.stopOnce.Do(func() {
+		r.cancel()
+		r.stopMu.Lock()
+		r.stopped = true
+		close(r.queue)
+		close(r.batchQueue)
+		r.stopMu.Unlock()
+	})
 	r.wg.Wait()
 }
 
@@ -495,8 +615,16 @@ func (r *relayClient) Send(data []byte) error {
 	cp := make([]byte, len(data))
 	copy(cp, data)
 
+	r.stopMu.RLock()
+	defer r.stopMu.RUnlock()
+	if r.stopped {
+		return fmt.Errorf("transport stopped")
+	}
 	select {
 	case r.batchQueue <- cp:
+		if len(cp) != 1 || cp[0] != 0 {
+			r.stats.DataPacketsQueued.Add(1)
+		}
 		return nil
 	default:
 		r.stats.QueueDrops.Add(1)
@@ -523,7 +651,7 @@ func (r *relayClient) worker(id int) {
 		err := r.sendBatch(batch)
 		if err != nil {
 			r.stats.HTTPReqsFailed.Add(1)
-			Debugf("[VOLGA] batch send failed: %v", err)
+			utils.Debugf("[VOLGA] batch send failed: %v", err)
 		} else {
 			r.stats.HTTPReqsSent.Add(1)
 			r.stats.BatchesSent.Add(1)
@@ -560,6 +688,10 @@ func (r *relayClient) worker(id int) {
 }
 
 func (r *relayClient) sendBatch(batch [][]byte) error {
+	auth := r.auth.Load()
+	if auth == nil {
+		return fmt.Errorf("authorization unavailable")
+	}
 	blob := blobBufPool.Get().(*bytes.Buffer)
 	blob.Reset()
 
@@ -576,8 +708,8 @@ func (r *relayClient) sendBatch(batch [][]byte) error {
 	blobBufPool.Put(blob)
 
 	frontier := r.getFrontier()
-	opID := fmt.Sprintf("1-%d.%d", r.auth.UserID, r.seq.Add(1))
-	relayOpID := fmt.Sprintf("1-%d.%d", r.auth.UserID, r.seq.Add(1))
+	opID := fmt.Sprintf("1-%d.%d", auth.UserID, r.seq.Add(1))
+	relayOpID := fmt.Sprintf("1-%d.%d", auth.UserID, r.seq.Add(1))
 
 	bundle := []interface{}{
 		map[string]interface{}{
@@ -595,7 +727,7 @@ func (r *relayClient) sendBatch(batch [][]byte) error {
 			"undoable":   false,
 			"actionName": "setCaret",
 			"ops": []interface{}{
-				[]interface{}{"us", r.auth.UserID, []interface{}{
+				[]interface{}{"us", auth.UserID, []interface{}{
 					[]interface{}{
 						[]interface{}{"vyd:t/00000000000008", 0, -1},
 						[]interface{}{"vyd:t/00000000000008", 0, -1},
@@ -628,16 +760,16 @@ func (r *relayClient) sendBatch(batch [][]byte) error {
 	copy(bodyCopy, buf.Bytes())
 	jsonBufPool.Put(buf)
 
-	urlStr := fmt.Sprintf("https://volga.yandex.ru/session/main/%s/relay", r.auth.RequestPath)
+	urlStr := fmt.Sprintf("https://volga.yandex.ru/session/main/%s/relay", auth.RequestPath)
 	req, err := http.NewRequestWithContext(r.ctx, "POST", urlStr, bytes.NewReader(bodyCopy))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", volgaUserAgent)
-	req.Header.Set("Authorization", "Bearer "+r.auth.Token)
+	req.Header.Set("Authorization", "Bearer "+auth.Token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "https://volga.yandex.ru")
-	req.Header.Set("Referer", "https://volga.yandex.ru/document/?request-path="+r.auth.RequestPath)
+	req.Header.Set("Referer", "https://volga.yandex.ru/document/?request-path="+auth.RequestPath)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
@@ -645,14 +777,20 @@ func (r *relayClient) sendBatch(batch [][]byte) error {
 	req.ContentLength = int64(len(bodyCopy))
 
 	var cookieParts []string
-	for _, c := range r.auth.Cookies {
+	for _, c := range auth.Cookies {
 		cookieParts = append(cookieParts, c.Name+"="+c.Value)
 	}
 	if len(cookieParts) > 0 {
 		req.Header.Set("Cookie", strings.Join(cookieParts, "; "))
 	}
 
-	resp, err := r.httpClient.Do(req)
+	// The session jar belongs to the current authorization: copy the client
+	// per request instead of mutating one that other workers are using.
+	client := *r.httpClient
+	if auth.Session != nil {
+		client.Jar = auth.Session.Jar
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -685,28 +823,35 @@ func (r *relayClient) getFrontier() []interface{} {
 }
 
 type wsListener struct {
-	auth   *volgaAuth
+	auth   *atomic.Pointer[volgaAuth]
 	config VolgaConfig
 	stats  *VolgaStats
 	relay  *relayClient
 	onData func([]byte)
+	// authorizeFn gets a fresh authorization; every reconnect after the
+	// first uses it, so a stale session cannot outlive one reconnect.
+	authorizeFn func() (*volgaAuth, error)
+
+	connMu sync.Mutex
+	conn   *websocket.Conn
 
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func newWSListener(auth *volgaAuth, cfg VolgaConfig, stats *VolgaStats,
-	relay *relayClient, onData func([]byte)) *wsListener {
+func newWSListener(auth *atomic.Pointer[volgaAuth], authorizeFn func() (*volgaAuth, error),
+	cfg VolgaConfig, stats *VolgaStats, relay *relayClient, onData func([]byte)) *wsListener {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &wsListener{
-		auth:   auth,
-		config: cfg,
-		stats:  stats,
-		relay:  relay,
-		onData: onData,
-		ctx:    ctx,
-		cancel: cancel,
+		auth:        auth,
+		authorizeFn: authorizeFn,
+		config:      cfg,
+		stats:       stats,
+		relay:       relay,
+		onData:      onData,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -716,10 +861,45 @@ func (w *wsListener) Start() {
 
 func (w *wsListener) Stop() {
 	w.cancel()
+	w.RequestReconnect()
+}
+
+// RequestReconnect drops the current WebSocket; run reconnects with a
+// fresh authorization.
+func (w *wsListener) RequestReconnect() {
+	w.connMu.Lock()
+	if w.conn != nil {
+		_ = w.conn.Close()
+	}
+	w.connMu.Unlock()
+}
+
+// refreshAuth publishes a new authorization to the listener and the relay.
+// On failure the old one stays in use.
+func (w *wsListener) refreshAuth() error {
+	if w.ctx != nil && w.ctx.Err() != nil {
+		return w.ctx.Err()
+	}
+	auth, err := w.authorizeFn()
+	if err != nil {
+		return err
+	}
+	if w.ctx != nil && w.ctx.Err() != nil {
+		return w.ctx.Err()
+	}
+	if auth == nil {
+		return fmt.Errorf("authorization returned no session")
+	}
+	w.auth.Store(auth)
+	if w.relay != nil {
+		w.relay.SetFrontier("")
+	}
+	return nil
 }
 
 func (w *wsListener) run() {
 	delay := w.config.ReconnectMinDelay
+	first := true
 
 	for {
 		select {
@@ -728,15 +908,28 @@ func (w *wsListener) run() {
 		default:
 		}
 
+		if !first && w.authorizeFn != nil {
+			if err := w.refreshAuth(); err != nil {
+				utils.Debugf("[VOLGA] authorization refresh failed; keeping the old one")
+			} else {
+				utils.Debugf("[VOLGA] authorization refreshed")
+			}
+		}
+		first = false
+		if w.ctx.Err() != nil {
+			return
+		}
+		connectedAt := time.Now()
 		if err := w.connect(); err != nil {
-			Debugf("[VOLGA] WS error: %v", err)
+			utils.Debugf("[VOLGA] WS disconnected: %T", err)
 		}
 		if w.ctx.Err() != nil {
 			return
 		}
 
 		w.stats.WSReconnects.Add(1)
-		Debugf("[VOLGA] WS reconnect in %v", delay)
+		delay = nextReconnectDelay(delay, time.Since(connectedAt), w.config)
+		utils.Debugf("[VOLGA] WS reconnect in %v", delay)
 		select {
 		case <-time.After(delay):
 		case <-w.ctx.Done():
@@ -750,15 +943,28 @@ func (w *wsListener) run() {
 	}
 }
 
+// nextReconnectDelay starts over from the minimum after a session that
+// stayed up, so one old failure does not slow every later reconnect.
+func nextReconnectDelay(current, connectedFor time.Duration, cfg VolgaConfig) time.Duration {
+	if connectedFor >= 2*cfg.WSReadTimeout {
+		return cfg.ReconnectMinDelay
+	}
+	return current
+}
+
 func (w *wsListener) connect() error {
+	auth := w.auth.Load()
+	if auth == nil {
+		return fmt.Errorf("authorization unavailable")
+	}
 	wsURL := "wss://push.yandex.ru/v2/subscribe/websocket?" +
 		"service=volga" +
-		"&user=" + url.QueryEscape(w.auth.UserIDStr) +
-		"&sign=" + w.auth.Sign +
-		"&ts=" + w.auth.TS +
+		"&user=" + url.QueryEscape(auth.UserIDStr) +
+		"&sign=" + auth.Sign +
+		"&ts=" + auth.TS +
 		"&client=web" +
-		"&session=" + w.auth.SessionID +
-		"&fetch_history=" + url.QueryEscape(w.auth.UserIDStr+":volga:0:1") +
+		"&session=" + auth.SessionID +
+		"&fetch_history=" + url.QueryEscape(auth.UserIDStr+":volga:0:1") +
 		"&x_request_attempt=0"
 
 	header := http.Header{}
@@ -766,24 +972,37 @@ func (w *wsListener) connect() error {
 	header.Set("Origin", "https://volga.yandex.ru")
 
 	var cookieParts []string
-	for _, c := range w.auth.Cookies {
+	for _, c := range auth.Cookies {
 		cookieParts = append(cookieParts, c.Name+"="+c.Value)
 	}
 	header.Set("Cookie", strings.Join(cookieParts, "; "))
 
 	dialer := websocket.Dialer{
+		NetDialContext:   dialIPv4First,
 		HandshakeTimeout: w.config.WSHandshakeTimeout,
-		ReadBufferSize:   4 << 20,
-		WriteBufferSize:  4 << 20,
+		ReadBufferSize:   w.config.WSReadBufferSize,
+		WriteBufferSize:  w.config.WSWriteBufferSize,
 	}
+	utils.ConfigureWebsocketDialerProxy(&dialer, wsURL)
 
 	conn, _, err := dialer.Dial(wsURL, header)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+	w.connMu.Lock()
+	w.conn = conn
+	w.connMu.Unlock()
+	defer func() {
+		w.connMu.Lock()
+		if w.conn == conn {
+			w.conn = nil
+		}
+		w.connMu.Unlock()
+	}()
 
-	Debugf("[VOLGA] WS connected: user=%s", w.auth.UserIDStr)
+	utils.Debugf("[VOLGA] WS connected")
+	started := time.Now()
 
 	for {
 		select {
@@ -792,13 +1011,22 @@ func (w *wsListener) connect() error {
 		default:
 		}
 
-		conn.SetReadDeadline(time.Now().Add(w.config.WSReadTimeout))
+		deadline := time.Now().Add(w.config.WSReadTimeout)
+		if w.config.MaxSessionAge > 0 {
+			if rotate := started.Add(w.config.MaxSessionAge); rotate.Before(deadline) {
+				deadline = rotate
+			}
+		}
+		conn.SetReadDeadline(deadline)
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return fmt.Errorf("read: %w", err)
 		}
 
 		w.handleMessage(msg)
+		if w.config.MaxSessionAge > 0 && time.Since(started) >= w.config.MaxSessionAge {
+			return fmt.Errorf("session rotation due")
+		}
 	}
 }
 
@@ -831,7 +1059,7 @@ func (w *wsListener) handleMessage(raw []byte) {
 		return
 	}
 
-	if inner.UserID == w.auth.UserID {
+	if auth := w.auth.Load(); auth != nil && inner.UserID == auth.UserID {
 		return
 	}
 
@@ -896,6 +1124,9 @@ func (w *wsListener) handleBundleItem(raw json.RawMessage) {
 		w.stats.PacketsRecv.Add(uint64(len(packets)))
 		w.stats.BytesReceived.Add(uint64(len(decoded)))
 		for _, pkt := range packets {
+			if len(pkt) != 1 || pkt[0] != 0 {
+				w.stats.DataPacketsRecv.Add(1)
+			}
 			if w.onData != nil {
 				w.onData(pkt)
 			}
@@ -921,30 +1152,52 @@ func decodeBatch(decoded []byte) [][]byte {
 }
 
 type YandexVolgaTransport struct {
-	*BaseTransport
+	*transport.BaseTransport
 
 	docURL string
 	config VolgaConfig
 	stats  *VolgaStats
 
-	auth  *volgaAuth
-	relay *relayClient
-	ws    *wsListener
+	auth atomic.Pointer[volgaAuth]
+	// linkMu guards relay and ws, which ApplyCookies replaces while the
+	// stats loop and Stop use them.
+	linkMu sync.Mutex
+	relay  *relayClient
+	ws     *wsListener
 
 	onDataMu sync.RWMutex
 	onData   func([]byte)
 
+	cookieJar *cookiejar.Jar
+	jarMu     sync.RWMutex
+
+	errNotifier func(err error, transportName, url, html, reason string)
+
 	keepAliveStop chan struct{}
 }
 
-func NewYandexVolgaTransport(docURL string, cfg TransportConfig) *YandexVolgaTransport {
+func NewYandexVolgaTransport(docURL string, cfg transport.TransportConfig) *YandexVolgaTransport {
+	return NewYandexVolgaTransportWithConfig(docURL, cfg, DefaultVolgaConfig())
+}
+
+// NewYandexVolgaTransportWithConfig is NewYandexVolgaTransport with a
+// resource profile, e.g. SlimVolgaConfig on a phone.
+func NewYandexVolgaTransportWithConfig(docURL string, cfg transport.TransportConfig, volga VolgaConfig) *YandexVolgaTransport {
+	jar, _ := cookiejar.New(nil)
 	return &YandexVolgaTransport{
-		BaseTransport: NewBaseTransport(cfg),
+		BaseTransport: transport.NewBaseTransport(cfg),
 		docURL:        docURL,
-		config:        DefaultVolgaConfig(),
+		config:        volga,
 		stats:         &VolgaStats{},
+		cookieJar:     jar,
 		keepAliveStop: make(chan struct{}),
 	}
+}
+
+// SetErrorNotifier installs a callback for out-of-band errors such as
+// ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
+func (t *YandexVolgaTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
+	t.errNotifier = fn
 }
 
 func (t *YandexVolgaTransport) Start() error {
@@ -952,17 +1205,39 @@ func (t *YandexVolgaTransport) Start() error {
 		return err
 	}
 
-	Debugf("[VOLGA] authorizing...")
-	auth, err := authorize(t.docURL)
+	utils.Debugf("[VOLGA] authorizing...")
+	auth, err := authorizeWithJar(t.docURL, t.jar())
 	if err != nil {
+		if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrLoginRequired) {
+			reason := "smartcaptcha"
+			if errors.Is(err, ErrLoginRequired) {
+				reason = "login"
+			}
+			if t.errNotifier != nil {
+				t.errNotifier(err, "vyandex", t.docURL, "", reason)
+			}
+		}
 		return fmt.Errorf("auth: %w", err)
 	}
-	t.auth = auth
+	t.startLinks(auth)
 
-	t.relay = newRelayClient(auth, t.config, t.stats)
-	t.relay.Start()
+	go t.keepAliveLoop()
+	go t.statsLoop()
+	t.SetConnected(true)
 
-	t.ws = newWSListener(auth, t.config, t.stats, t.relay, func(data []byte) {
+	utils.Debugf("[VOLGA] transport started: user=%d", auth.UserID)
+	return nil
+}
+
+// startLinks publishes auth and starts a relay and a WebSocket listener
+// that share it.
+func (t *YandexVolgaTransport) startLinks(auth *volgaAuth) {
+	t.auth.Store(auth)
+	relay := newRelayClient(&t.auth, t.config, t.stats)
+	relay.Start()
+	ws := newWSListener(&t.auth, func() (*volgaAuth, error) {
+		return authorizeWithJar(t.docURL, t.jar())
+	}, t.config, t.stats, relay, func(data []byte) {
 		t.onDataMu.RLock()
 		cb := t.onData
 		t.onDataMu.RUnlock()
@@ -971,15 +1246,23 @@ func (t *YandexVolgaTransport) Start() error {
 		}
 		t.RecordReceive(len(data))
 	})
-	t.ws.Start()
+	ws.Start()
+	t.linkMu.Lock()
+	t.relay, t.ws = relay, ws
+	t.linkMu.Unlock()
+}
 
-	go t.keepAliveLoop()
-	go t.statsLoop()
-	t.SetConnected(true)
-
-	Debugf("[VOLGA] transport started: user=%d(%s) rp=%s",
-		auth.UserID, auth.UserIDStr, auth.RequestPath)
-	return nil
+// stopLinks stops the current relay and WebSocket listener.
+func (t *YandexVolgaTransport) stopLinks() {
+	t.linkMu.Lock()
+	relay, ws := t.relay, t.ws
+	t.linkMu.Unlock()
+	if ws != nil {
+		ws.Stop()
+	}
+	if relay != nil {
+		relay.Stop()
+	}
 }
 
 func (t *YandexVolgaTransport) Stop() error {
@@ -988,21 +1271,19 @@ func (t *YandexVolgaTransport) Stop() error {
 	default:
 		close(t.keepAliveStop)
 	}
-	if t.ws != nil {
-		t.ws.Stop()
-	}
-	if t.relay != nil {
-		t.relay.Stop()
-	}
+	t.stopLinks()
 	t.SetConnected(false)
 	return t.BaseTransport.Stop()
 }
 
 func (t *YandexVolgaTransport) Send(data []byte) error {
-	if t.relay == nil {
+	t.linkMu.Lock()
+	relay := t.relay
+	t.linkMu.Unlock()
+	if relay == nil {
 		return fmt.Errorf("transport not started")
 	}
-	return t.relay.Send(data)
+	return relay.Send(data)
 }
 
 func (t *YandexVolgaTransport) Receive(callback func([]byte)) {
@@ -1015,9 +1296,9 @@ func (t *YandexVolgaTransport) IsConnected() bool {
 	return t.BaseTransport.IsConnected()
 }
 
-func (t *YandexVolgaTransport) Stats() TransportStats {
+func (t *YandexVolgaTransport) Stats() transport.TransportStats {
 	base := t.BaseTransport.Stats()
-	return TransportStats{
+	return transport.TransportStats{
 		BytesSent:     t.stats.BytesSent.Load(),
 		BytesReceived: t.stats.BytesReceived.Load(),
 		PacketsSent:   t.stats.PacketsSent.Load(),
@@ -1040,7 +1321,7 @@ func (t *YandexVolgaTransport) keepAliveLoop() {
 			if !t.IsRunning() {
 				return
 			}
-			_ = t.relay.Send([]byte{0x00})
+			_ = t.Send([]byte{0x00})
 		}
 	}
 }
@@ -1050,6 +1331,8 @@ func (t *YandexVolgaTransport) statsLoop() {
 	defer ticker.Stop()
 
 	var lastSent, lastBytes, lastHTTP, lastFailed, lastRecv, lastRecvBytes, lastBatches, lastBatched uint64
+	var lastData, lastRecvData uint64
+	var stalled stalledTraffic
 
 	for {
 		select {
@@ -1061,11 +1344,23 @@ func (t *YandexVolgaTransport) statsLoop() {
 			httpReqs := t.stats.HTTPReqsSent.Load()
 			failed := t.stats.HTTPReqsFailed.Load()
 			recv := t.stats.PacketsRecv.Load()
+			data := t.stats.DataPacketsQueued.Load()
+			recvData := t.stats.DataPacketsRecv.Load()
+			if stalled.Observe(data-lastData, recvData-lastRecvData) {
+				utils.Debugf("[VOLGA] outbound traffic has no replies; refreshing the session")
+				t.linkMu.Lock()
+				ws := t.ws
+				t.linkMu.Unlock()
+				if ws != nil {
+					ws.RequestReconnect()
+				}
+			}
+			lastData, lastRecvData = data, recvData
 			recvBytes := t.stats.BytesReceived.Load()
 			batches := t.stats.BatchesSent.Load()
 			batched := t.stats.PacketsBatched.Load()
 
-			Debugf("[VOLGA-STATS] send %d pkt/s (%d KB/s) | http %d req/s fail %d | batch %d (avg %.1f pkt) | recv %d pkt/s (%d KB/s) | busy %d/%d",
+			utils.Debugf("[VOLGA-STATS] send %d pkt/s (%d KB/s) | http %d req/s fail %d | batch %d (avg %.1f pkt) | recv %d pkt/s (%d KB/s) | busy %d/%d",
 				(sent-lastSent)/5, (bytes-lastBytes)/5/1024,
 				(httpReqs-lastHTTP)/5, failed-lastFailed,
 				(batches-lastBatches)/5,
@@ -1081,9 +1376,113 @@ func (t *YandexVolgaTransport) statsLoop() {
 	}
 }
 
+// stalledTraffic spots a session that takes packets but returns nothing:
+// user packets went out and no user packet came back for a minute (12
+// five-second stats intervals). Idle time and any reply reset it.
+type stalledTraffic struct {
+	unanswered int
+	pending    bool
+}
+
+func (s *stalledTraffic) Observe(sent, received uint64) bool {
+	if received > 0 {
+		s.unanswered = 0
+		s.pending = false
+		return false
+	}
+	if sent > 0 {
+		s.pending = true
+	}
+	if !s.pending {
+		return false
+	}
+	s.unanswered++
+	if s.unanswered < 12 {
+		return false
+	}
+	s.unanswered = 0
+	s.pending = false
+	return true
+}
+
 func maxU64(a, b uint64) uint64 {
 	if a > b {
 		return a
 	}
 	return b
+}
+
+// jar returns the transport's shared cookie jar (never nil).
+// LoadCookieFile imports a Netscape cookies.txt (yandex.ru cookies only)
+// into the transport's cookie jar, so it opens the document signed in.
+func (t *YandexVolgaTransport) LoadCookieFile(path string) error {
+	return loadYandexCookies(path, t.jar())
+}
+
+func (t *YandexVolgaTransport) jar() *cookiejar.Jar {
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+	if jar == nil {
+		jar, _ = cookiejar.New(nil)
+		t.jarMu.Lock()
+		t.cookieJar = jar
+		t.jarMu.Unlock()
+	}
+	return jar
+}
+
+// ---- CookieExchanger ----
+
+// FetchCookies returns a snapshot of the transport's current cookie jar as
+// name -> value for the current document host.
+func (t *YandexVolgaTransport) FetchCookies() (map[string]string, error) {
+	auth := t.auth.Load()
+	if auth == nil {
+		return nil, fmt.Errorf("volga: not started")
+	}
+	out := make(map[string]string)
+	for _, c := range auth.Cookies {
+		out[c.Name] = c.Value
+	}
+	return out, nil
+}
+
+// ApplyCookies replaces the transport's cookie jar, updates the live auth's
+// Cookies slice, and forces the current sessions to reconnect.
+func (t *YandexVolgaTransport) ApplyCookies(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	jar, _ := cookiejar.New(nil)
+	u, _ := url.Parse(t.docURL)
+	cookies := siteCookies(u, values)
+	if u != nil {
+		jar.SetCookies(u, cookies)
+	}
+
+	t.jarMu.Lock()
+	t.cookieJar = jar
+	t.jarMu.Unlock()
+
+	if old := t.auth.Load(); old != nil {
+		updated := *old
+		updated.Cookies = cookies
+		t.auth.Store(&updated)
+	}
+
+	utils.Debugf("[VOLGA] applied %d cookies, forcing reconnect", len(cookies))
+
+	t.stopLinks()
+	if t.IsRunning() {
+		utils.SafeGo("volga.reconnect", func() {
+			auth, err := authorizeWithJar(t.docURL, t.jar())
+			if err != nil {
+				utils.Debugf("[VOLGA] re-authorize: %v", err)
+				return
+			}
+			t.startLinks(auth)
+		})
+	}
+	return nil
 }

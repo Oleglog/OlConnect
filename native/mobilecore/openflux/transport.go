@@ -14,26 +14,19 @@ func detectTransport(docURL string) string {
 	if strings.Contains(docURL, "mail.ru") {
 		return "mailru"
 	}
-
-	httpClient := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", docURL, nil)
-	if err != nil {
-		return "yandex"
+	if strings.Contains(docURL, "avito.ru") {
+		return "avito"
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "yandex"
+	if strings.Contains(docURL, "cups.online") {
+		return "cupsonline"
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return "yandex"
+	if strings.Contains(docURL, "telemost.yandex.ru") {
+		return "telemost"
 	}
-
-	content := string(body)
-	if strings.Contains(content, `"officeType":"volga"`) || (strings.Contains(content, "volga") && !strings.Contains(content, "balancer_url")) {
+	if strings.Contains(docURL, "bitrix24") {
+		return "bitrix24"
+	}
+	if strings.Contains(docURL, "/edit/d/") {
 		return "vyandex"
 	}
 	return "yandex"
@@ -50,6 +43,10 @@ type compressedTransport struct {
 
 func newCompressedTransport(inner Transport) *compressedTransport {
 	return &compressedTransport{inner: inner}
+}
+
+func NewCompressedTransport(inner Transport) Transport {
+	return newCompressedTransport(inner)
 }
 
 func (c *compressedTransport) Start() error       { return c.inner.Start() }

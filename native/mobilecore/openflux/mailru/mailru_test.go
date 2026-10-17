@@ -1,4 +1,4 @@
-package openflux
+package mailru
 
 import (
 	"testing"

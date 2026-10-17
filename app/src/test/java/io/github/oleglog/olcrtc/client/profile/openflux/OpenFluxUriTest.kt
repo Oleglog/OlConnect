@@ -120,4 +120,27 @@ class OpenFluxUriTest {
         assertEquals(original.transport, parsed.transport)
         assertEquals(OpenFluxProfile.Codec.LEGACY, parsed.codec)
     }
+
+    @Test
+    fun serializeRoundTripAllTransports() {
+        val transports = listOf(
+            OpenFluxProfile.Transport.TELEMOST to "https://telemost.yandex.ru/j/1234567890",
+            OpenFluxProfile.Transport.CUPSONLINE to "https://interview.cups.online/live-coding/12345678-1234-1234-1234-123456789abc",
+            OpenFluxProfile.Transport.BITRIX24 to "https://company.bitrix24.ru",
+            OpenFluxProfile.Transport.AVITO to "https://www.avito.ru",
+        )
+        for ((transport, url) in transports) {
+            val original = OpenFluxProfile(
+                name = "${transport.name} Profile",
+                documentUrl = url,
+                transport = transport,
+            )
+            val uri = OpenFluxUri.serialize(original)
+            val parsed = OpenFluxUri.parse(uri)
+
+            assertEquals(original.name, parsed.name)
+            assertEquals(original.documentUrl, parsed.documentUrl)
+            assertEquals(original.transport, parsed.transport)
+        }
+    }
 }

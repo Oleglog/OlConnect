@@ -36,8 +36,24 @@ internal object OpenFluxUri {
     }
 
     fun serialize(profile: OpenFluxProfile): String {
-        val encodedUrl = encode(profile.documentUrl)
-        val host = if (profile.transport == OpenFluxProfile.Transport.MAILRU || profile.documentUrl.contains("mail.ru")) "mailru" else "yandex"
+        val host = when (profile.transport) {
+            OpenFluxProfile.Transport.MAILRU -> "mailru"
+            OpenFluxProfile.Transport.TELEMOST -> "telemost"
+            OpenFluxProfile.Transport.CUPSONLINE -> "cupsonline"
+            OpenFluxProfile.Transport.BITRIX24 -> "bitrix24"
+            OpenFluxProfile.Transport.AVITO -> "avito"
+            OpenFluxProfile.Transport.VYANDEX -> "vyandex"
+            OpenFluxProfile.Transport.YANDEX -> "yandex"
+            OpenFluxProfile.Transport.AUTO -> {
+                if (profile.documentUrl.contains("mail.ru")) "mailru"
+                else if (profile.documentUrl.contains("telemost.yandex.ru")) "telemost"
+                else if (profile.documentUrl.contains("cups.online")) "cupsonline"
+                else if (profile.documentUrl.contains("bitrix24")) "bitrix24"
+                else if (profile.documentUrl.contains("avito.ru")) "avito"
+                else if (profile.documentUrl.contains("/edit/d/")) "vyandex"
+                else "yandex"
+            }
+        }
         val builder = StringBuilder("openflux://$host?url=").append(encodedUrl)
         if (profile.transport != OpenFluxProfile.Transport.AUTO) {
             builder.append("&t=").append(encode(profile.transport.value))

@@ -1,58 +1,30 @@
 package openflux
 
 import (
-	"fmt"
-	"log"
-	"os"
-	"sync"
-)
-
-var (
-	debugLog  *log.Logger
-	verbose   bool
-	logSinkMu sync.RWMutex
-	logSink   func(string)
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
 
 func EnableDebug() {
-	verbose = true
-	debugLog = log.New(os.Stderr, "", log.LstdFlags|log.Lmicroseconds)
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+	utils.EnableDebug()
 }
 
 func Debugf(format string, args ...interface{}) {
-	if verbose {
-		message := fmt.Sprintf(format, args...)
-		if debugLog != nil {
-			debugLog.Output(2, message)
-		}
+	utils.Debugf(format, args...)
+}
 
-		logSinkMu.RLock()
-		sink := logSink
-		logSinkMu.RUnlock()
-		if sink != nil {
-			sink(message)
-		}
-	}
+func Infof(format string, args ...interface{}) {
+	utils.Infof(format, args...)
 }
 
 func SafeGo(name string, fn func()) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				Debugf("[%s] recovered panic: %v", name, r)
-			}
-		}()
-		fn()
-	}()
+	utils.SafeGo(name, fn)
 }
 
 func SetLogSink(sink func(string)) {
-	logSinkMu.Lock()
-	logSink = sink
-	logSinkMu.Unlock()
+	utils.SetLogSink(sink)
 }
 
 func IsVerbose() bool {
-	return verbose
+	return utils.Level() > 0
 }
+

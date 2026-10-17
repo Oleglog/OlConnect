@@ -13,8 +13,8 @@ data class OpenFluxProfile(
     init {
         require(name.isNotBlank()) { "name is required" }
         require(documentUrl.isNotBlank()) { "documentUrl is required" }
-        require(documentUrl.startsWith("http://") || documentUrl.startsWith("https://")) {
-            "documentUrl must be a valid HTTP or HTTPS URL"
+        require(documentUrl.startsWith("http://") || documentUrl.startsWith("https://") || documentUrl.length >= 10) {
+            "documentUrl must be a valid HTTP or HTTPS URL or room descriptor"
         }
         dnsServer?.let(DnsEndpoint::parse)
     }
@@ -23,7 +23,11 @@ data class OpenFluxProfile(
         AUTO("auto"),
         VYANDEX("vyandex"),
         YANDEX("yandex"),
-        MAILRU("mailru");
+        MAILRU("mailru"),
+        TELEMOST("telemost"),
+        CUPSONLINE("cupsonline"),
+        BITRIX24("bitrix24"),
+        AVITO("avito");
 
         companion object {
             fun parse(value: String): Transport = entries.firstOrNull { it.value == value.trim().lowercase() }

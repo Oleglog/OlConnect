@@ -2,8 +2,16 @@ package openflux
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/avito"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/bitrix24"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/cupsonline"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/mailru"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/yandex"
 )
 
 var (
@@ -72,8 +80,8 @@ func Start(documentURL string, transportType string) string {
 	client.logs = nil
 	client.mu.Unlock()
 
-	EnableDebug()
-	SetLogSink(appendLog)
+	utils.EnableDebug()
+	utils.SetLogSink(appendLog)
 
 	config := DefaultTransportConfig()
 	detected := transportType
@@ -85,13 +93,25 @@ func Start(documentURL string, transportType string) string {
 	switch detected {
 	case "mailru":
 		appendLog("[ANDROID] Запуск транспорта Mail.ru Docs")
-		innerTrans = NewMailruDocsTransport(documentURL, config)
-	case "vyandex":
+		innerTrans = mailru.NewMailruDocsTransport(documentURL, config)
+	case "avito":
+		appendLog("[ANDROID] Обнаружен сервис Avito. Запуск транспорта avito")
+		innerTrans = avito.NewAvitoTransport(documentURL, config, "", true)
+	case "cupsonline", "cups":
+		appendLog("[ANDROID] Обнаружен сервис Cups.online. Запуск транспорта cupsonline")
+		innerTrans = cupsonline.NewCupsonlineTransport(documentURL, config, true)
+	case "telemost":
+		appendLog("[ANDROID] Обнаружена конференция Telemost. Запуск транспорта telemost")
+		innerTrans = yandex.NewTelemostTransport("", documentURL, false, config)
+	case "bitrix24", "b24":
+		appendLog("[ANDROID] Обнаружен сервис Bitrix24. Запуск транспорта bitrix24")
+		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, os.Getenv("B24_COOKIES"), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
+	case "vyandex", "volga":
 		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
-		innerTrans = NewYandexVolgaTransport(documentURL, config)
+		innerTrans = yandex.NewYandexVolgaTransport(documentURL, config)
 	default:
 		appendLog("[ANDROID] Запуск классического транспорта yandex")
-		innerTrans = NewYandexDocsTransport(documentURL, config)
+		innerTrans = yandex.NewYandexDocsTransport(documentURL, config)
 	}
 
 	encKeyMu.Lock()
