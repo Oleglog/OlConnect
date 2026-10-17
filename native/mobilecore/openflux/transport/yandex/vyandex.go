@@ -196,6 +196,12 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 	var finalURL string
 	currentURL := docURL
 
+	// captchaRounds counts consecutive captcha solves without reaching the
+	// document. Mobile networks often trigger repeated SmartCaptcha loops
+	// that never converge; fail fast with a clear hint instead of spinning.
+	captchaRounds := 0
+	const maxCaptchaRounds = 3
+
 	for i := 0; i < 15; i++ {
 		req, _ := http.NewRequest("GET", currentURL, nil)
 		req.Header.Set("User-Agent", volgaUserAgent)
@@ -222,6 +228,10 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 				bytes.Contains(body, []byte("Вы не робот?"))
 
 			if isCaptcha {
+				captchaRounds++
+				if captchaRounds > maxCaptchaRounds {
+					return nil, fmt.Errorf("%w: captcha loop at %s (insert Yandex session cookies in the profile)", ErrCaptchaRequired, currentURL)
+				}
 				utils.Debugf("[VOLGA] captcha HTML detected in 200 OK from %s, solving...", currentURL)
 				nextURL, cerr := solveCaptchaHTML(string(body), currentURL, jar, volgaUserAgent)
 				if cerr != nil {
@@ -248,6 +258,10 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 			}
 
 			if strings.Contains(loc, "showcaptcha") || strings.Contains(loc, "showcaptchafast") {
+				captchaRounds++
+				if captchaRounds > maxCaptchaRounds {
+					return nil, fmt.Errorf("%w: captcha loop at %s (insert Yandex session cookies in the profile)", ErrCaptchaRequired, currentURL)
+				}
 				utils.Debugf("[VOLGA] captcha required at %s, solving...", loc)
 				targetCaptchaURL := loc
 				if strings.HasPrefix(targetCaptchaURL, "/") {

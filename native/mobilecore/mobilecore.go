@@ -413,6 +413,10 @@ func SetOpenFluxCodec(codec string) {
 	openflux.SetCodec(codec)
 }
 
+func SetOpenFluxCookies(cookies string) {
+	openflux.SetCookies(cookies)
+}
+
 func StopOpenFlux() {
 	openflux.Stop()
 }

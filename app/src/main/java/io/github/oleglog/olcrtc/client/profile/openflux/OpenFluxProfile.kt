@@ -9,6 +9,9 @@ data class OpenFluxProfile(
     val codec: Codec = Codec.BATCHED,
     val dnsServer: String? = null,
     val encryptionKey: String? = null,
+    // Session cookies for Mail.ru / Yandex ("name=value; name2=value2"
+    // or Netscape cookies.txt content). Never serialized into shareable URIs.
+    val cookies: String? = null,
 ) {
     init {
         require(name.isNotBlank()) { "name is required" }

@@ -28,6 +28,7 @@
     <string name="profile_field_key">Ключ шифрования</string>
     <string name="profile_field_auth_token">Токен авторизации</string>
     <string name="profile_field_dns">DNS-сервер</string>
+    <string name="profile_field_cookies">Куки сессии (Mail.ru / Яндекс)</string>
     <string name="profile_field_vp8_fps">Кадров VP8 в секунду</string>
     <string name="profile_field_vp8_batch">Размер пакета VP8</string>
     <string name="profile_speed_preset_balanced">Сбаланс. (60 fps · пакет 32)</string>

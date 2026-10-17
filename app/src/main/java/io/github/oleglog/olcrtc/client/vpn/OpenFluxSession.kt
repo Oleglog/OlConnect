@@ -76,6 +76,7 @@ internal class OpenFluxSession(
         } else {
             Mobilecore.setOpenFluxEncryptionKey("")
         }
+        Mobilecore.setOpenFluxCookies(profile.cookies.orEmpty())
         val error = Mobilecore.startOpenFlux(profile.documentUrl, profile.transport.value)
         if (!error.isNullOrEmpty()) {
             throw IllegalStateException(error)

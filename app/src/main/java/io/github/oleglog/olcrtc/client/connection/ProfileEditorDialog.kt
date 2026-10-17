@@ -233,6 +233,7 @@ internal object ProfileEditorDialog {
             },
         )
         val dns = field(fragment, form, R.string.profile_field_dns, profile.dnsServer.orEmpty())
+        val cookies = field(fragment, form, R.string.profile_field_cookies, profile.cookies.orEmpty())
 
         return {
             ProfileConfig.OpenFlux(
@@ -243,6 +244,7 @@ internal object ProfileEditorDialog {
                     codec = codec.selected,
                     dnsServer = dns.optionalValue(),
                     encryptionKey = profile.encryptionKey,
+                    cookies = cookies.optionalValue(),
                 ),
             )
         }

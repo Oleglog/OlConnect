@@ -21,7 +21,17 @@ var (
 	encryptionKey string
 	codecMu       sync.Mutex
 	currentCodec  = "batched"
+	cookiesMu     sync.Mutex
+	sessionCookies string
 )
+
+// SetCookies stores raw session cookies ("name=value; ..." or Netscape
+// cookies.txt content) applied to Mail.ru / Yandex transports on Start.
+func SetCookies(cookies string) {
+	cookiesMu.Lock()
+	defer cookiesMu.Unlock()
+	sessionCookies = strings.TrimSpace(cookies)
+}
 
 // SetEncryptionKey configures an optional AES-256-GCM transport key.
 func SetEncryptionKey(key string) {
@@ -118,7 +128,9 @@ func Start(documentURL string, transportType string) string {
 	switch detected {
 	case "mailru":
 		appendLog("[ANDROID] Запуск транспорта Mail.ru Docs")
-		innerTrans = mailru.NewMailruDocsTransport(documentURL, config)
+		mr := mailru.NewMailruDocsTransport(documentURL, config)
+		applySessionCookies(mr)
+		innerTrans = mr
 	case "avito":
 		appendLog("[ANDROID] Обнаружен сервис Avito. Запуск транспорта avito")
 		innerTrans = avito.NewAvitoTransport(documentURL, config, "", true)
@@ -133,10 +145,14 @@ func Start(documentURL string, transportType string) string {
 		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, os.Getenv("B24_COOKIES"), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
 	case "vyandex", "volga":
 		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
-		innerTrans = yandex.NewYandexVolgaTransport(documentURL, config)
+		vt := yandex.NewYandexVolgaTransport(documentURL, config)
+		applySessionCookies(vt)
+		innerTrans = vt
 	default:
 		appendLog("[ANDROID] Запуск классического транспорта yandex")
-		innerTrans = yandex.NewYandexDocsTransport(documentURL, config)
+		yt := yandex.NewYandexDocsTransport(documentURL, config)
+		applySessionCookies(yt)
+		innerTrans = yt
 	}
 
 	encKeyMu.Lock()
@@ -198,6 +214,71 @@ func Start(documentURL string, transportType string) string {
 	client.transport = trans
 	client.mu.Unlock()
 	return ""
+}
+
+// cookieApplier is implemented by transports with a cookie jar (mailru, yandex).
+type cookieApplier interface {
+	ApplyCookies(values map[string]string) error
+}
+
+// applySessionCookies parses SetCookies content (either "name=value; ..."
+// pairs or Netscape cookies.txt lines) and pushes matching-domain cookies
+// into the transport. Unknown/foreign domains are ignored by each parser.
+func applySessionCookies(t cookieApplier) {
+	cookiesMu.Lock()
+	raw := sessionCookies
+	cookiesMu.Unlock()
+	if strings.TrimSpace(raw) == "" {
+		return
+	}
+	values := parseSessionCookies(raw)
+	if len(values) == 0 {
+		appendLog("[ANDROID] Куки заданы, но ни одной пары name=value не распознано")
+		return
+	}
+	if err := t.ApplyCookies(values); err != nil {
+		appendLog(fmt.Sprintf("[ANDROID] Ошибка применения кук: %v", err))
+		return
+	}
+	appendLog(fmt.Sprintf("[ANDROID] Применено кук сессии: %d", len(values)))
+}
+
+// parseSessionCookies accepts "a=b; c=d" and Netscape cookies.txt lines
+// (domain\t...\tname\tvalue), skipping comments and expired entries.
+func parseSessionCookies(raw string) map[string]string {
+	out := make(map[string]string)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) >= 7 {
+			// Netscape format: domain, subdomains, path, secure, expires, name, value.
+			name := strings.TrimSpace(fields[5])
+			value := strings.TrimSpace(fields[6])
+			if name != "" && value != "" {
+				out[name] = value
+			}
+			continue
+		}
+		for _, part := range strings.Split(line, ";") {
+			part = strings.TrimSpace(part)
+			if part == "" || strings.HasPrefix(part, "#") {
+				continue
+			}
+			kv := strings.SplitN(part, "=", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			name := strings.TrimSpace(kv[0])
+			value := strings.TrimSpace(kv[1])
+			if name != "" && value != "" {
+				out[name] = value
+			}
+		}
+	}
+	return out
 }
 
 func Stop() {

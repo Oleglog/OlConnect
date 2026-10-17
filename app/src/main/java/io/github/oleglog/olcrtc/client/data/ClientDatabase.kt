@@ -72,6 +72,7 @@ internal data class OpenFluxProfileEntity(
     val documentUrl: ByteArray,
     val transport: String,
     val dnsServer: String,
+    @ColumnInfo(defaultValue = "x''") val cookies: ByteArray = byteArrayOf(),
 )
 
 @Dao
@@ -607,7 +608,7 @@ internal class RoutingRuleRepository(
         AppRoutingEntryEntity::class,
         RoutingRuleEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 internal abstract class ClientDatabase : RoomDatabase() {
@@ -717,6 +718,14 @@ internal abstract class ClientDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE `openflux_profiles` ADD COLUMN `cookies` BLOB NOT NULL DEFAULT x''",
+                )
+            }
+        }
+
         fun open(context: Context): ClientDatabase = Room.databaseBuilder(
             context.applicationContext,
             ClientDatabase::class.java,
@@ -731,6 +740,7 @@ internal abstract class ClientDatabase : RoomDatabase() {
             MIGRATION_7_8,
             MIGRATION_8_9,
             MIGRATION_9_10,
+            MIGRATION_10_11,
         )
             .addCallback(localGroupCallback)
             .enableMultiInstanceInvalidation()

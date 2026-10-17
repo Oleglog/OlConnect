@@ -545,6 +545,7 @@ internal class ProfileRepository(
                             ?: io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec.BATCHED,
                         dnsServer = value.stringOrNull("dnsServer"),
                         encryptionKey = value.stringOrNull("encryptionKey"),
+                        cookies = value.stringOrNull("cookies"),
                     ),
                 )
             }
@@ -563,6 +564,7 @@ internal class ProfileRepository(
         .put("codec", codec.value)
         .put("dnsServer", dnsServer)
         .put("encryptionKey", encryptionKey)
+        .put("cookies", cookies)
         .toString()
 
     private fun OlcrtcProfile.toJson(): String = JSONObject()
@@ -760,6 +762,7 @@ internal class ProfileRepository(
         documentUrl = secrets.encrypt(documentUrl),
         transport = transport.value,
         dnsServer = dnsServer.orEmpty(),
+        cookies = cookies?.let(secrets::encrypt) ?: byteArrayOf(),
     )
 
     private fun OpenFluxProfileEntity.toProfile() = io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile(
@@ -767,6 +770,7 @@ internal class ProfileRepository(
         documentUrl = secrets.decrypt(documentUrl),
         transport = io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.parse(transport),
         dnsServer = dnsServer.takeIf(String::isNotBlank),
+        cookies = cookies.takeIf(ByteArray::isNotEmpty)?.let(secrets::decrypt)?.takeIf(String::isNotBlank),
     )
 
     companion object {

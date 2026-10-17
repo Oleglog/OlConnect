@@ -31,6 +31,9 @@ internal object OpenFluxUri {
         val codecParam = params["c"] ?: params["codec"]
         val dnsParam = params["d"] ?: params["dns"]
         val keyParam = params["k"] ?: params["key"]
+        // Cookies are accepted on import but never serialized back: sharing
+        // a URI must not leak session credentials.
+        val cookiesParam = params["cookies"]
         val fragment = uri.rawFragment?.let(::decode)?.takeIf(String::isNotBlank)
 
         val name = fragment ?: "OpenFlux"
@@ -42,6 +45,7 @@ internal object OpenFluxUri {
             codec = codecParam?.let(OpenFluxProfile.Codec::parse) ?: OpenFluxProfile.Codec.BATCHED,
             dnsServer = dnsParam,
             encryptionKey = keyParam,
+            cookies = cookiesParam?.takeIf(String::isNotBlank),
         )
     }
 

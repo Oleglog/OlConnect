@@ -152,4 +152,26 @@ class OpenFluxUriTest {
         assertEquals(OpenFluxProfile.Transport.CUPSONLINE, parsed.transport)
         assertEquals("?rooms=testBase64PackedRooms123", parsed.documentUrl)
     }
+
+    @Test
+    fun parseUriWithCookies() {
+        val raw = "openflux://mailru?url=https%3A%2F%2Fcloud.mail.ru%2Fpublic%2Fabcd%2Fefgh&cookies=sdc%3Dabc123%3B+Mpop%3Dxyz#Mailru+Cookies"
+        val parsed = OpenFluxUri.parse(raw)
+        assertEquals("sdc=abc123; Mpop=xyz", parsed.cookies)
+    }
+
+    @Test
+    fun serializeNeverLeaksCookies() {
+        val original = OpenFluxProfile(
+            name = "Cookie Profile",
+            documentUrl = "https://cloud.mail.ru/public/abcd/efgh",
+            transport = OpenFluxProfile.Transport.MAILRU,
+            cookies = "sdc=abc123; Mpop=xyz",
+        )
+        val uri = OpenFluxUri.serialize(original)
+        assert(!uri.contains("sdc"))
+        assert(!uri.contains("cookies"))
+        val parsed = OpenFluxUri.parse(uri)
+        assertEquals(null, parsed.cookies)
+    }
 }
