@@ -146,7 +146,7 @@ func Start(documentURL string, transportType string) string {
 		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, sessionCookieHeader(), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
 	case "vyandex", "volga":
 		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
-		vt := yandex.NewYandexVolgaTransport(documentURL, config)
+		vt := yandex.NewYandexVolgaTransportWithConfig(documentURL, config, yandex.SlimVolgaConfig())
 		applySessionCookies(vt)
 		innerTrans = vt
 	default:
