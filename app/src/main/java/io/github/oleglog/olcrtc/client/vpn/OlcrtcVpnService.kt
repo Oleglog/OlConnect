@@ -1032,7 +1032,7 @@ class OlcrtcVpnService : VpnService() {
                 "OpenFlux native runtime transport=${profile.value.transport.value}",
             )
             val dnsEndpoint = sessionDns(profile, routingSettings.getDnsServer())
-            val dnsIp = profile.value.dnsServer?.takeIf(String::isNotBlank) ?: "1.1.1.1"
+            val dnsIp = profile.value.dnsServer?.takeIf(String::isNotBlank) ?: "77.88.8.8"
             packetFilterCache.clear()
             val session = OpenFluxSession(
                 profile = profile.value,

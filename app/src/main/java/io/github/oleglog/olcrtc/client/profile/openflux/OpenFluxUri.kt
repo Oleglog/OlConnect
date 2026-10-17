@@ -14,10 +14,20 @@ internal object OpenFluxUri {
 
         val uri = URI(trimmed)
         val params = parseQuery(uri.rawQuery)
-        val urlParam = params["url"] ?: params["u"]
-        require(!urlParam.isNullOrBlank()) { "OpenFlux URI requires 'url' parameter" }
+        val urlParam = params["url"] ?: params["u"] ?: params["rooms"]?.let { "?rooms=$it" } ?: params["room"]?.let { "?room=$it" }
+        require(!urlParam.isNullOrBlank()) { "OpenFlux URI requires 'url' or 'rooms' parameter" }
 
-        val transportParam = params["t"] ?: params["transport"] ?: "auto"
+        val transportFromHost = when (uri.host?.lowercase()) {
+            "mailru" -> "mailru"
+            "telemost" -> "telemost"
+            "cups", "cupsonline" -> "cupsonline"
+            "bitrix24", "bitrix" -> "bitrix24"
+            "avito" -> "avito"
+            "vyandex" -> "vyandex"
+            "yandex" -> "yandex"
+            else -> "auto"
+        }
+        val transportParam = params["t"] ?: params["transport"] ?: if (transportFromHost != "auto") transportFromHost else "auto"
         val codecParam = params["c"] ?: params["codec"]
         val dnsParam = params["d"] ?: params["dns"]
         val keyParam = params["k"] ?: params["key"]

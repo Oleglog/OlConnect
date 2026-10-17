@@ -230,39 +230,62 @@ internal class OpenFluxSession(
     }
 
     private fun queryDnsOverHttps(query: ByteArray, dns: String): ByteArray {
-        val endpoint = when (dns) {
-            "8.8.8.8", "8.8.4.4" -> "https://dns.google/dns-query"
-            "9.9.9.9", "149.112.112.112" -> "https://dns.9.9.9.9/dns-query"
-            "77.88.8.8", "77.88.8.1" -> "https://common.dot.yandex.net/dns-query"
-            else -> "https://cloudflare-dns.com/dns-query"
+        val endpoints = mutableListOf<String>()
+        when (dns) {
+            "77.88.8.8", "77.88.8.1" -> {
+                endpoints.add("https://common.dot.yandex.net/dns-query")
+                endpoints.add("https://dns.google/dns-query")
+            }
+            "8.8.8.8", "8.8.4.4" -> {
+                endpoints.add("https://dns.google/dns-query")
+                endpoints.add("https://common.dot.yandex.net/dns-query")
+            }
+            "9.9.9.9", "149.112.112.112" -> {
+                endpoints.add("https://dns.9.9.9.9/dns-query")
+                endpoints.add("https://common.dot.yandex.net/dns-query")
+            }
+            else -> {
+                // In Russia, cloudflare-dns.com (1.1.1.1) is blocked by TSPU.
+                // Prioritize Yandex DoH, then Google, then Cloudflare.
+                endpoints.add("https://common.dot.yandex.net/dns-query")
+                endpoints.add("https://dns.google/dns-query")
+                endpoints.add("https://cloudflare-dns.com/dns-query")
+            }
         }
 
-        val connection = URL(endpoint).openConnection() as HttpURLConnection
-        connection.connectTimeout = 5000
-        connection.readTimeout = 5000
-        connection.requestMethod = "POST"
-        connection.setRequestProperty("Accept", "application/dns-message")
-        connection.setRequestProperty("Content-Type", "application/dns-message")
-        connection.doOutput = true
-        connection.setFixedLengthStreamingMode(query.size)
-        try {
-            connection.outputStream.use { it.write(query) }
-            val statusCode = connection.responseCode
-            if (statusCode != HttpURLConnection.HTTP_OK) {
-                throw IOException("DoH returned HTTP $statusCode")
+        var lastException: Exception? = null
+        for (endpoint in endpoints) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = URL(endpoint).openConnection() as HttpURLConnection
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Accept", "application/dns-message")
+                conn.setRequestProperty("Content-Type", "application/dns-message")
+                conn.doOutput = true
+                conn.setFixedLengthStreamingMode(query.size)
+                conn.outputStream.use { it.write(query) }
+                val statusCode = conn.responseCode
+                if (statusCode != HttpURLConnection.HTTP_OK) {
+                    throw IOException("DoH returned HTTP $statusCode from $endpoint")
+                }
+                val input: InputStream = conn.inputStream
+                val output = ByteArrayOutputStream()
+                val buf = ByteArray(2048)
+                var read: Int
+                while (input.read(buf).also { read = it } != -1) {
+                    output.write(buf, 0, read)
+                    if (output.size() > 65535) throw IOException("DNS response too large")
+                }
+                return output.toByteArray()
+            } catch (e: Exception) {
+                lastException = e
+            } finally {
+                runCatching { conn?.disconnect() }
             }
-            val input: InputStream = connection.inputStream
-            val output = ByteArrayOutputStream()
-            val buf = ByteArray(2048)
-            var read: Int
-            while (input.read(buf).also { read = it } != -1) {
-                output.write(buf, 0, read)
-                if (output.size() > 65535) throw IOException("DNS response too large")
-            }
-            return output.toByteArray()
-        } finally {
-            connection.disconnect()
         }
+        throw lastException ?: IOException("All DoH endpoints failed")
     }
 
     private fun inject(output: FileOutputStream, packet: ByteArray) {

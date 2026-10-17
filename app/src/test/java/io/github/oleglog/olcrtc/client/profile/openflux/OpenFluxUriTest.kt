@@ -143,4 +143,13 @@ class OpenFluxUriTest {
             assertEquals(original.transport, parsed.transport)
         }
     }
+
+    @Test
+    fun parseCupsWithRoomsParameter() {
+        val raw = "openflux://cups?rooms=testBase64PackedRooms123#My+Cups"
+        val parsed = OpenFluxUri.parse(raw)
+        assertEquals("My Cups", parsed.name)
+        assertEquals(OpenFluxProfile.Transport.CUPSONLINE, parsed.transport)
+        assertEquals("?rooms=testBase64PackedRooms123", parsed.documentUrl)
+    }
 }
