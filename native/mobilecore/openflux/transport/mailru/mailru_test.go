@@ -1,6 +1,8 @@
 package mailru
 
 import (
+	"encoding/base64"
+	"reflect"
 	"testing"
 )
 
@@ -30,5 +32,23 @@ func TestNormalizeWeblink(t *testing.T) {
 		if actual != tc.expected {
 			t.Errorf("normalizeWeblink(%q) = %q, expected %q", tc.input, actual, tc.expected)
 		}
+	}
+}
+
+func TestV2ChatFramesDistinguishEndpointsOnSameAccount(t *testing.T) {
+	encode := func(sender, payload string) string {
+		return chatDataTagV2 + sender + base64.StdEncoding.EncodeToString([]byte(payload))
+	}
+	frame := `42["message",{"type":"message","messages":[` +
+		`{"message":"` + encode("2222222222", "peer") + `","useridoriginal":"shared-user"},` +
+		`{"message":"` + encode("1111111111", "self") + `","useridoriginal":"shared-user"},` +
+		`{"message":"` + chatDataTag + base64.StdEncoding.EncodeToString([]byte("legacy-self")) + `","useridoriginal":"shared-user"}` +
+		`]}]`
+
+	got := decodeChatDataFilter([]byte(frame), "1111111111", func(id string) bool {
+		return id == "shared-user"
+	})
+	if len(got) != 1 || !reflect.DeepEqual(got[0], []byte("peer")) {
+		t.Fatalf("decoded frames = %q, want only peer", got)
 	}
 }

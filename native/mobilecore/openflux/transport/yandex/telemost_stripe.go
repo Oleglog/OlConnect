@@ -45,6 +45,18 @@ func NewTelemostGroup(cookies, conferenceURL string, n int, isExitNode bool, con
 	return g
 }
 
+// NewStripedTelemostTransport builds the production Telemost carrier: three
+// participants initially, growing to six when the lanes remain saturated.
+// The stripe restores order and retransmits RTP packets lost by the SFU.
+func NewStripedTelemostTransport(cookies, conferenceURL string, isExitNode bool, config transport.TransportConfig) *transport.StripedTransport {
+	const (
+		initialLanes = 3
+		maxLanes     = 6
+	)
+	group := NewTelemostGroup(cookies, conferenceURL, initialLanes, isExitNode, config)
+	return transport.NewStripedTransportAuto(group.Lanes(), group, maxLanes, true)
+}
+
 // TelemostGroup is the set of lanes (participants) one node runs in a room.
 type TelemostGroup struct {
 	cookies, url string

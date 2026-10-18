@@ -825,6 +825,13 @@ func (t *MailruDocsTransport) writerLoop() {
 			time.Sleep(15 * time.Millisecond)
 			continue
 		}
+		// The modern R7 backend accepts chat writes only after authChangesAck.
+		// Keep the packet pending while this connection completes that handshake.
+		select {
+		case <-session.ready:
+		case <-t.Done():
+			return
+		}
 
 		// Pace the chat-message rate to flatten retransmit bursts so they do
 		// not drain R7's 4004 message token bucket faster than a rotation can
@@ -842,7 +849,7 @@ func (t *MailruDocsTransport) writerLoop() {
 		// its text against the document model (unlike cursor/saveChanges, which it
 		// now rejects). We tag the base64 payload so our frames are told apart from
 		// a human's chat and from the server's echo of our own messages.
-		payload := chatDataTag + base64.StdEncoding.EncodeToString(pending)
+		payload := chatDataTagV2 + t.baseUserID + base64.StdEncoding.EncodeToString(pending)
 		msg := fmt.Sprintf(`42["message",{"type":"message","message":%q}]`, payload)
 		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
 			utils.Debugf("[M-DOCS] Write error: %v", err)
@@ -988,6 +995,17 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 
+	if strings.Contains(text, `"type":"authChanges"`) {
+		if session != nil && session.Conn != nil {
+			if err := session.safeWrite(websocket.TextMessage, []byte(authChangesAckMsg)); err != nil {
+				utils.Debugf("[M-DOCS] authChangesAck write error: %v", err)
+				return
+			}
+			session.markReady()
+		}
+		return
+	}
+
 	// The server announces why it is about to close us with a disconnectReason
 	// frame (e.g. code 4004 "access deny" anti-abuse, 4007 "drop" lock
 	// contention) just before the socket closes. Surface it at INFO — it is rare
@@ -1024,13 +1042,12 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	// Tunnel data arrives as a chat broadcast the server relays from the other
 	// participant:
 	//   42["message",{"type":"message","messages":[{message,useridoriginal,…}]}]
-	// decodeChatDataFilter keeps only our-tagged frames from participants that
-	// are not us — isOwnID rejects every id this transport authenticated as, so
-	// a rotation's old connection never re-delivers the new connection's echoes.
+	// V2 frames carry a per-transport sender id, so endpoints authenticated with
+	// the same Mail.ru account do not mistake each other for self echoes.
 	// Only the active session delivers, so a frame is never delivered twice
 	// during a rotation (both connections see every broadcast).
 	if strings.Contains(text, `"messages"`) && session.active.Load() {
-		for _, pkt := range decodeChatDataFilter(data, t.isOwnID) {
+		for _, pkt := range decodeChatDataFilter(data, t.baseUserID, t.isOwnID) {
 			t.RecordReceive(len(pkt))
 			// Never block the reader: a full queue means downstream is behind,
 			// so drop (the Session's ARQ retransmits) and keep reading so the
@@ -1047,10 +1064,14 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	}
 }
 
-// chatDataTag prefixes every tunnel payload carried over the chat channel, so a
-// receiver can tell our frames from a human's chat message and skip anything it
-// cannot decode as ours.
-const chatDataTag = "OFX1"
+// V1 identified self echoes by Mail.ru's useridoriginal, which is shared when
+// both endpoints use cookies from the same account. V2 embeds a random
+// per-transport sender id and therefore distinguishes those endpoints.
+const (
+	chatDataTag        = "OFX1"
+	chatDataTagV2      = "OFX2"
+	chatSenderIDLength = 10
+)
 
 // isOwnID reports whether an editor id is one of this transport's own
 // connections (so a chat frame from it is our own echo, not peer data).
@@ -1066,12 +1087,9 @@ func (t *MailruDocsTransport) isOwnID(id string) bool {
 //
 //	42["message",{"type":"message","messages":[{"message":"…","useridoriginal":"…"},…]}]
 //
-// It keeps only tagged entries (chatDataTag) whose useridoriginal is NOT our own
-// (isOwn reports that) — the server echoes every chat back to its sender, and a
-// rotation's old connection also sees the new connection's echoes — and
-// base64-decodes the remainder. Human chat and presence entries (no tag) are
-// ignored.
-func decodeChatDataFilter(frame []byte, isOwn func(string) bool) [][]byte {
+// V2 echoes are filtered by the sender id embedded in the payload. V1 remains
+// readable and falls back to useridoriginal filtering for rolling upgrades.
+func decodeChatDataFilter(frame []byte, ownSenderID string, isOwnLegacy func(string) bool) [][]byte {
 	i := bytes.IndexByte(frame, '[')
 	if i < 0 {
 		return nil
@@ -1092,13 +1110,27 @@ func decodeChatDataFilter(frame []byte, isOwn func(string) bool) [][]byte {
 	}
 	var out [][]byte
 	for _, m := range payload.Messages {
-		if isOwn != nil && isOwn(m.UserIDOriginal) {
-			continue // the server's echo of one of our own connections
+		encoded := ""
+		switch {
+		case strings.HasPrefix(m.Message, chatDataTagV2):
+			body := m.Message[len(chatDataTagV2):]
+			if len(body) < chatSenderIDLength {
+				continue
+			}
+			senderID := body[:chatSenderIDLength]
+			if ownSenderID != "" && senderID == ownSenderID {
+				continue
+			}
+			encoded = body[chatSenderIDLength:]
+		case strings.HasPrefix(m.Message, chatDataTag):
+			if isOwnLegacy != nil && isOwnLegacy(m.UserIDOriginal) {
+				continue
+			}
+			encoded = m.Message[len(chatDataTag):]
+		default:
+			continue
 		}
-		if !strings.HasPrefix(m.Message, chatDataTag) {
-			continue // a human's chat, or a presence entry
-		}
-		dec, err := base64.StdEncoding.DecodeString(m.Message[len(chatDataTag):])
+		dec, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			utils.Debugf("[M-DOCS] chat payload decode error: %v", err)
 			continue
@@ -1111,7 +1143,7 @@ func decodeChatDataFilter(frame []byte, isOwn func(string) bool) [][]byte {
 // decodeChatData keeps only tagged entries from a single other participant
 // (useridoriginal != ownID). Retained for the parity test / exported form.
 func decodeChatData(frame []byte, ownID string) [][]byte {
-	return decodeChatDataFilter(frame, func(id string) bool { return ownID != "" && id == ownID })
+	return decodeChatDataFilter(frame, "", func(id string) bool { return ownID != "" && id == ownID })
 }
 
 // DecodeChatData is the exported form of decodeChatData (pure; the JS port is

@@ -134,13 +134,13 @@ func Start(documentURL string, transportType string) string {
 		innerTrans = mr
 	case "avito":
 		appendLog("[ANDROID] Обнаружен сервис Avito. Запуск транспорта avito")
-		innerTrans = avito.NewAvitoTransport(documentURL, config, sessionCookieHeader(), true)
+		innerTrans = transport.NewStripedRoomTransport(avito.NewAvitoTransport(documentURL, config, sessionCookieHeader(), true))
 	case "cupsonline", "cups":
 		appendLog("[ANDROID] Обнаружен сервис Cups.online. Запуск транспорта cupsonline")
-		innerTrans = cupsonline.NewCupsonlineTransport(documentURL, config, true)
+		innerTrans = transport.NewStripedRoomTransport(cupsonline.NewCupsonlineTransport(documentURL, config, true))
 	case "telemost":
 		appendLog("[ANDROID] Обнаружена конференция Telemost. Запуск транспорта telemost")
-		innerTrans = yandex.NewTelemostTransport(sessionCookieHeader(), documentURL, false, config)
+		innerTrans = yandex.NewStripedTelemostTransport(sessionCookieHeader(), documentURL, false, config)
 	case "bitrix24", "b24":
 		appendLog("[ANDROID] Обнаружен сервис Bitrix24. Запуск транспорта bitrix24")
 		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, sessionCookieHeader(), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))

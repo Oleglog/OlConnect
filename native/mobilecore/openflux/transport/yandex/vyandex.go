@@ -37,6 +37,10 @@ type VolgaConfig struct {
 	BatchSize     int
 	BatchTimeout  time.Duration
 	BatchMaxBytes int
+	// RequestInterval caps relay operations to the cadence accepted by the
+	// editor backend. RateLimitMaxDelay bounds exponential 429 backoff.
+	RequestInterval   time.Duration
+	RateLimitMaxDelay time.Duration
 
 	MaxPayloadBytes int
 	MinPayloadBytes int
@@ -65,14 +69,16 @@ func DefaultVolgaConfig() VolgaConfig {
 		IdleConnTimeout:     90 * time.Second,
 		RelayTimeout:        30 * time.Second,
 
-		WorkerCount: 2000,
+		WorkerCount: 1,
 		QueueSize:   1000000,
 
-		BatchSize:     20,
-		BatchTimeout:  2 * time.Millisecond,
-		BatchMaxBytes: 4 * 1024 * 1024,
+		BatchSize:        20,
+		BatchTimeout:     50 * time.Millisecond,
+		BatchMaxBytes:    4 * 1024 * 1024,
+		RequestInterval:  250 * time.Millisecond,
+		RateLimitMaxDelay: 5 * time.Second,
 
-		MaxPayloadBytes: 5_000_000,
+		MaxPayloadBytes: (1 << 16) - 1,
 		MinPayloadBytes: 200,
 
 		ReconnectMinDelay:   500 * time.Millisecond,
@@ -97,7 +103,7 @@ func SlimVolgaConfig() VolgaConfig {
 	c := DefaultVolgaConfig()
 	c.MaxIdleConnsPerHost = 8
 	c.MaxIdleConns = 16
-	c.WorkerCount = 4
+	c.WorkerCount = 1
 	c.QueueSize = 4096
 	c.BatchMaxBytes = 256 * 1024
 	c.WSReadBufferSize = 128 << 10
@@ -549,7 +555,6 @@ type relayClient struct {
 
 	httpClient *http.Client
 	workers    int
-	queue      chan []byte
 	batchQueue chan []byte
 	wg         sync.WaitGroup
 	ctx        context.Context
@@ -561,6 +566,10 @@ type relayClient struct {
 
 	mu       sync.Mutex
 	frontier string
+
+	requestMu   sync.Mutex
+	nextRequest time.Time
+	rateBackoff time.Duration
 
 	// stopMu orders Send against Stop: Stop closes the queues, and a send
 	// on a closed channel panics even inside a select with a default.
@@ -590,7 +599,6 @@ func newRelayClient(auth *atomic.Pointer[volgaAuth], cfg VolgaConfig, stats *Vol
 			Timeout:   cfg.RelayTimeout,
 		},
 		workers:    cfg.WorkerCount,
-		queue:      make(chan []byte, cfg.QueueSize),
 		batchQueue: make(chan []byte, cfg.QueueSize),
 		ctx:        ctx,
 		cancel:     cancel,
@@ -611,7 +619,6 @@ func (r *relayClient) Stop() {
 		r.cancel()
 		r.stopMu.Lock()
 		r.stopped = true
-		close(r.queue)
 		close(r.batchQueue)
 		r.stopMu.Unlock()
 	})
@@ -624,6 +631,9 @@ func (r *relayClient) Send(data []byte) error {
 	}
 	if len(data) > r.config.MaxPayloadBytes {
 		return fmt.Errorf("packet too large: %d > %d", len(data), r.config.MaxPayloadBytes)
+	}
+	if len(data) > (1<<16)-1 {
+		return fmt.Errorf("packet too large for Volga wire format: %d > %d", len(data), (1<<16)-1)
 	}
 
 	cp := make([]byte, len(data))
@@ -649,59 +659,159 @@ func (r *relayClient) Send(data []byte) error {
 func (r *relayClient) worker(id int) {
 	defer r.wg.Done()
 
-	batch := make([][]byte, 0, r.config.BatchSize)
-	totalBytes := 0
-	timer := time.NewTimer(r.config.BatchTimeout)
-	if !timer.Stop() {
-		<-timer.C
-	}
-	defer timer.Stop()
-
-	flush := func() {
-		if len(batch) == 0 {
+	for {
+		var first []byte
+		select {
+		case <-r.ctx.Done():
 			return
+		case pkt, ok := <-r.batchQueue:
+			if !ok {
+				return
+			}
+			first = pkt
 		}
+
+		batch := make([][]byte, 0, r.config.BatchSize)
+		batch = append(batch, first)
+		totalBytes := len(first)
+		timer := time.NewTimer(r.config.BatchTimeout)
+
+	collect:
+		for len(batch) < r.config.BatchSize && totalBytes < r.config.BatchMaxBytes {
+			select {
+			case <-r.ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			case pkt, ok := <-r.batchQueue:
+				if !ok {
+					break collect
+				}
+				batch = append(batch, pkt)
+				totalBytes += len(pkt)
+			case <-timer.C:
+				break collect
+			}
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+
 		r.stats.WorkerBusy.Add(1)
-		err := r.sendBatch(batch)
+		err := r.sendBatchWithRetry(batch)
 		if err != nil {
-			r.stats.HTTPReqsFailed.Add(1)
 			utils.Debugf("[VOLGA] batch send failed: %v", err)
 		} else {
 			r.stats.HTTPReqsSent.Add(1)
 			r.stats.BatchesSent.Add(1)
 		}
 		r.stats.WorkerBusy.Add(-1)
-		batch = batch[:0]
-		totalBytes = 0
-	}
-
-	for {
-		select {
-		case <-r.ctx.Done():
-			flush()
-			return
-
-		case pkt, ok := <-r.batchQueue:
-			if !ok {
-				flush()
-				return
-			}
-			batch = append(batch, pkt)
-			totalBytes += len(pkt)
-
-			if len(batch) >= r.config.BatchSize || totalBytes >= r.config.BatchMaxBytes {
-				flush()
-			} else if len(batch) == 1 {
-				timer.Reset(r.config.BatchTimeout)
-			}
-
-		case <-timer.C:
-			flush()
-		}
 	}
 }
 
+type rateLimitError struct {
+	retryAfter time.Duration
+}
+
+func (e *rateLimitError) Error() string { return "status 429" }
+
+func (r *relayClient) sendBatchWithRetry(batch [][]byte) error {
+	for {
+		err := r.sendBatch(batch)
+		if err == nil {
+			r.requestMu.Lock()
+			r.rateBackoff = 0
+			r.requestMu.Unlock()
+			return nil
+		}
+		r.stats.HTTPReqsFailed.Add(1)
+		var limited *rateLimitError
+		if !errors.As(err, &limited) {
+			return err
+		}
+		delay := r.noteRateLimited(limited.retryAfter)
+		utils.Debugf("[VOLGA] relay rate limited (429); retrying batch in %v", delay)
+	}
+}
+
+func (r *relayClient) waitRequestSlot() error {
+	interval := r.config.RequestInterval
+	if interval <= 0 {
+		return nil
+	}
+	r.requestMu.Lock()
+	now := time.Now()
+	slot := now
+	if r.nextRequest.After(slot) {
+		slot = r.nextRequest
+	}
+	r.nextRequest = slot.Add(interval)
+	r.requestMu.Unlock()
+
+	if delay := time.Until(slot); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (r *relayClient) noteRateLimited(serverDelay time.Duration) time.Duration {
+	r.requestMu.Lock()
+	defer r.requestMu.Unlock()
+	base := r.config.RequestInterval
+	if base <= 0 {
+		base = 250 * time.Millisecond
+	}
+	if r.rateBackoff < base {
+		r.rateBackoff = base
+	} else {
+		r.rateBackoff *= 2
+	}
+	maxDelay := r.config.RateLimitMaxDelay
+	if maxDelay <= 0 {
+		maxDelay = 5 * time.Second
+	}
+	if r.rateBackoff > maxDelay {
+		r.rateBackoff = maxDelay
+	}
+	delay := r.rateBackoff
+	if serverDelay > delay {
+		delay = serverDelay
+	}
+	if next := time.Now().Add(delay); next.After(r.nextRequest) {
+		r.nextRequest = next
+	}
+	return delay
+}
+
+func retryAfterDelay(value string) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(at); delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+
 func (r *relayClient) sendBatch(batch [][]byte) error {
+	if err := r.waitRequestSlot(); err != nil {
+		return err
+	}
 	auth := r.auth.Load()
 	if auth == nil {
 		return fmt.Errorf("authorization unavailable")
@@ -811,6 +921,9 @@ func (r *relayClient) sendBatch(batch [][]byte) error {
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return &rateLimitError{retryAfter: retryAfterDelay(resp.Header.Get("Retry-After"))}
+	}
 	if resp.StatusCode != 204 && resp.StatusCode != 200 {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
@@ -1306,12 +1419,10 @@ func (t *YandexVolgaTransport) Receive(callback func([]byte)) {
 	t.onDataMu.Unlock()
 }
 
-// volgaPreferredBatchBytes sizes the upper coalescing layer's batches for the
-// relay channel: the inner relay worker already coalesces up to BatchSize
-// packets / BatchMaxBytes per op, so the upper batch just needs to be big
-// enough to feed it full relay ops (base64 inflates ~33%) without spraying
-// every TCP segment as its own op. OPENFLUX_BATCH_BYTES overrides.
-const volgaPreferredBatchBytes = 256 * 1024
+// volgaPreferredBatchBytes stays below the relay's uint16 packet length even
+// when the upper batch admits one final MTU-sized packet at its byte limit.
+// The relay worker combines several of these frames into one HTTP operation.
+const volgaPreferredBatchBytes = 60 * 1024
 
 // PreferredBatchBytes implements transport.BatchSizeHinter.
 func (t *YandexVolgaTransport) PreferredBatchBytes() int { return volgaPreferredBatchBytes }

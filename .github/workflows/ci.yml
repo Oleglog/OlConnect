@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobilecore:
+    name: Mobilecore Go tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/mobilecore
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/mobilecore/go.mod
+          cache: true
+          cache-dependency-path: native/mobilecore/go.sum
+      - run: go test ./...
