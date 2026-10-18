@@ -337,8 +337,10 @@ func (t *TelemostTransport) getConnectionInfo() error {
 	req.Header.Set("Accept-Language", "en-US,en;q=0.6")
 	req.Header.Set("Client-Instance-Id", t.clientInstanceID)
 	req.Header.Set("Connection", "keep-alive")
-	if method == "POST" {
+	if t.cookies != "" {
 		req.Header.Set("Cookie", t.cookies)
+	}
+	if method == "POST" {
 		req.Header.Set("X-Uid", t.userID)
 	}
 	req.Header.Set("Origin", "https://telemost.yandex.ru")

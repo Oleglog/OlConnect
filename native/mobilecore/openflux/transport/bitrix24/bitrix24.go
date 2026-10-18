@@ -106,6 +106,10 @@ func (t *Bitrix24Transport) Start() error {
 		}
 		t.chatID = "chat" + strconv.Itoa(cid)
 		utils.Debugf("[B24] created chat %s", t.chatID)
+		// ponytail: print like avito/cups so the operator can pin B24_CHAT_ID and reuse the chat.
+		fmt.Printf("\n=== COPY THIS TO CLIENT ===\n")
+		fmt.Printf("B24_CHAT_ID=%s\n", t.chatID)
+		fmt.Printf("===========================\n\n")
 	}
 
 	for i := 0; i < numWriters; i++ {
@@ -425,4 +429,19 @@ func (t *Bitrix24Transport) FetchCookies() (map[string]string, error) {
 		"sessid":  t.sessid,
 		"chat_id": t.chatID,
 	}, nil
+}
+
+// ApplyCookies replaces the auth state (cookie header, sessid, chat) so the
+// exit node can accept cookies pushed by the client at runtime.
+func (t *Bitrix24Transport) ApplyCookies(values map[string]string) error {
+	if v, ok := values["cookies"]; ok {
+		t.cookies = v
+	}
+	if v, ok := values["sessid"]; ok {
+		t.sessid = v
+	}
+	if v, ok := values["chat_id"]; ok {
+		t.chatID = v
+	}
+	return nil
 }
