@@ -33,6 +33,7 @@ internal class OpenFluxSession(
     private val bytesDown = java.util.concurrent.atomic.AtomicLong(0)
     private val pktsUp = java.util.concurrent.atomic.AtomicLong(0)
     private val pktsDown = java.util.concurrent.atomic.AtomicLong(0)
+    private val pktsFiltered = java.util.concurrent.atomic.AtomicLong(0)
 
     private var tunnelPfd: ParcelFileDescriptor? = null
     private var tunnelInput: FileInputStream? = null
@@ -126,6 +127,7 @@ internal class OpenFluxSession(
                 // Enforce per-app and routing policy at packet boundary:
                 // Drop and reset packets from unallowed apps trying to bypass routing via SO_BINDTODEVICE tun0
                 if (isPacketAllowed != null && !isPacketAllowed.invoke(packet)) {
+                    pktsFiltered.incrementAndGet()
                     executeWorker {
                         val out = synchronized(outputLock) { tunnelOutput }
                         if (out != null && !closed.get()) {
@@ -198,7 +200,7 @@ internal class OpenFluxSession(
                 onLog(logs)
             }
             if (tx != lastTx || rx != lastRx) {
-                onLog("OpenFlux datapath: tx=$tx pkts ($txBytes B), rx=$rx pkts ($rxBytes B)")
+                onLog("OpenFlux datapath: tx=$tx pkts ($txBytes B), rx=$rx pkts ($rxBytes B), filtered=${pktsFiltered.get()}")
                 lastTx = tx
                 lastRx = rx
             }

@@ -1295,9 +1295,13 @@ class OlcrtcVpnService : VpnService() {
 
                 val ownerUid = connectivity.getConnectionOwnerUid(protocol, localAddress, remoteAddress)
                 if (ownerUid == android.os.Process.INVALID_UID || ownerUid <= 0) {
-                    // Excluded or unmanaged apps binding to tun0 return INVALID_UID.
-                    // When split-tunneling is active, drop them to prevent server IP leak (Issue #5).
-                    return false
+                    // UID lookup for a fresh SYN / first UDP packet often returns
+                    // INVALID_UID transiently; fail-open here. OS-level
+                    // addDisallowedApplication remains the real enforcement for
+                    // excluded apps (fail-closed blackholed all new flows + poisoned
+                    // the 5-tuple cache). ponytail: fail-open, tighten only with a
+                    // re-lookup on established flows if a leak is proven.
+                    return true
                 }
 
                 if (ownerUid == android.os.Process.myUid()) {
@@ -1306,7 +1310,7 @@ class OlcrtcVpnService : VpnService() {
 
                 val packageNames = packageManager.getPackagesForUid(ownerUid)
                 if (packageNames.isNullOrEmpty()) {
-                    return false
+                    return true
                 }
 
                 for (pkg in packageNames) {
@@ -1325,7 +1329,7 @@ class OlcrtcVpnService : VpnService() {
                     PerAppPolicy.Mode.ONLY_SELECTED -> packageNames.any { perAppPolicy.packages.contains(it) }
                 }
             } catch (_: Throwable) {
-                return false
+                return true
             }
         }
         return true
