@@ -22,4 +22,5 @@ jobs:
           go-version-file: native/mobilecore/go.mod
           cache: true
           cache-dependency-path: native/mobilecore/go.sum
+      - run: go mod download github.com/openlibrecommunity/olcrtc
       - run: go test ./...
