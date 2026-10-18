@@ -2928,8 +2928,11 @@ func (t *TelemostTransport) readSharingVideoTrack(track *webrtc.TrackRemote) {
 	}
 	var reasm frameReassembler
 	var rx struct{ pkts, gaps, late, bad atomic.Uint64 }
-	var lastSeq uint16
-	haveSeq := false
+	// ponytail: per-SSRC seq state; single lastSeq mixed RTX/FEC SSRCs and
+	// reported ~89% phantom gaps while rrLoss stayed 0.
+	var seqMu sync.Mutex
+	seqBySSRC := map[uint32]uint16{}
+	haveBySSRC := map[uint32]bool{}
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
@@ -2963,17 +2966,20 @@ func (t *TelemostTransport) readSharingVideoTrack(track *webrtc.TrackRemote) {
 			continue
 		}
 		rx.pkts.Add(1)
+		seqMu.Lock()
+		lastSeq, haveSeq := seqBySSRC[pkt.SSRC], haveBySSRC[pkt.SSRC]
 		if haveSeq {
 			switch d := pkt.SequenceNumber - lastSeq; {
 			case d == 0 || d >= 0x8000:
 				rx.late.Add(1)
 			default:
 				rx.gaps.Add(uint64(d - 1))
-				lastSeq = pkt.SequenceNumber
+				seqBySSRC[pkt.SSRC] = pkt.SequenceNumber
 			}
 		} else {
-			lastSeq, haveSeq = pkt.SequenceNumber, true
+			seqBySSRC[pkt.SSRC], haveBySSRC[pkt.SSRC] = pkt.SequenceNumber, true
 		}
+		seqMu.Unlock()
 		// Always count received RTP payload bytes for throughput stats.
 		t.stats.PacketsRecv.Add(1)
 		t.stats.BytesReceived.Add(uint64(len(pkt.Payload)))
