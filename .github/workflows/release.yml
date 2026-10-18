@@ -125,12 +125,12 @@ jobs:
           CERT_SHA256=$("$APKSIGNER" verify --print-certs "$APK_PATH" | \
             grep -i "SHA-256 digest:" | \
             head -1 | \
-            awk '{print $3}' | \
+            awk '{print $6}' | \
             tr -d ':' | \
             tr '[:upper:]' '[:lower:]')
 
-          if [ -z "$CERT_SHA256" ]; then
-            echo "Error: Could not extract certificate SHA-256 from APK" >&2
+          if ! [[ "$CERT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Error: Could not extract a valid certificate SHA-256 from APK" >&2
             exit 1
           fi
 
