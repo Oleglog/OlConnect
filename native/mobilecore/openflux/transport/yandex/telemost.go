@@ -1,4 +1,4 @@
-﻿// Package yandex: Telemost transport.
+// Package yandex: Telemost transport.
 //
 // Tunnels packets through a Yandex Telemost conference: HTTP join gives
 // the signaling WS URL + room/peer/credentials; WS carries SDP/ICE; two
@@ -34,6 +34,7 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
@@ -400,7 +401,11 @@ func (t *TelemostTransport) connectWS(attempt int) {
 		headers.Set("User-Agent", telemostUserAgent)
 		headers.Set("Origin", "https://telemost.yandex.ru")
 		utils.Debugf("[Telemost] WS dial -> %s", t.mediaServerURL)
-		conn, resp, err := websocket.DefaultDialer.Dial(t.mediaServerURL, headers)
+		wsDialer := websocket.Dialer{
+			NetDialContext:   netbind.DialContext,
+			HandshakeTimeout: 20 * time.Second,
+		}
+		conn, resp, err := wsDialer.Dial(t.mediaServerURL, headers)
 		if err != nil {
 			status := 0
 			if resp != nil {
@@ -697,12 +702,12 @@ func (t *TelemostTransport) sendHello() error {
 			// up front it will never send audio is a reasonable thing for
 			// the SFU to just not bother forwarding, independent of
 			// whatever actually turns up on the audio m-line afterward.
-			SendAudio: t.shareCarrier == "audio",
+			SendAudio: true && t.shareCarrier == "audio",
 			SendVideo: true,
 			// The video track we publish is a DISPLAY_VIDEO (screen share)
-			// track, and the SFU gates sharing slots on this flag. With it false
-			// the SFU accepted the m-line, bound the SSRC, and still never
-			// created a video slot - videoSlots stayed [].
+			// track, and the SFU gates sharing slots on this flag. With it
+			// false the SFU accepted the m-line, bound the SSRC, and still
+			// never created a video slot - videoSlots stayed [].
 			SendSharing: true,
 			ParticipantAttributes: map[string]interface{}{
 				"name": t.name(), "role": "SPEAKER", "description": "",
@@ -906,6 +911,13 @@ func (t *TelemostTransport) handleTextMessage(data []byte) {
 		return
 	}
 	if ice, ok := msg["webrtcIceCandidate"].(map[string]interface{}); ok {
+		if hasUID {
+			t.sendAck(uid)
+		}
+		t.handleICECandidate(ice)
+		return
+	}
+	if ice, ok := msg["onIceCandidate"].(map[string]interface{}); ok {
 		if hasUID {
 			t.sendAck(uid)
 		}
@@ -1179,19 +1191,11 @@ func newTelemostSubscriberAPI() (*webrtc.API, error) {
 	if err := registerTelemostCodecs(mediaEngine); err != nil {
 		return nil, err
 	}
+	se := newTelemostSettingEngine()
 	if envOrDefault("TELEMOST_SUB_BWE", "0") == "0" {
 		utils.Debugf("[Telemost] subscriber BWE feedback DISABLED (baseline)")
-		return webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine)), nil
+		return webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine), webrtc.WithSettingEngine(se)), nil
 	}
-	// Register ONLY transport-cc: TWCC feedback needs the transport-wide
-	// sequence number on inbound RTP. Deliberately NOT MID or RID — pion
-	// demuxes incoming RTP by the MID/RID extensions when they are registered,
-	// and the SFU's forwarded share video does not carry a MID that matches our
-	// recvonly transceivers, so registering MID silently drops every video
-	// packet before OnTrack (audio still arrives). SSRC-based demux (the
-	// default when MID is absent) is what actually works here. As the answerer
-	// we only emit transport-cc if the SFU offered it, so this is safe
-	// regardless of what the SFU supports.
 	useTWCC := envOrDefault("TELEMOST_SUB_TWCC", "1") != "0"
 	for _, kind := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeVideo, webrtc.RTPCodecTypeAudio} {
 		if !useTWCC {
@@ -1220,7 +1224,11 @@ func newTelemostSubscriberAPI() (*webrtc.API, error) {
 	}
 	utils.Debugf("[Telemost] subscriber BWE feedback ENABLED (TWCC+RR, nack=%s)",
 		envOrDefault("TELEMOST_SUB_NACK", "0"))
-	return webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(ir)), nil
+	return webrtc.NewAPI(
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(ir),
+		webrtc.WithSettingEngine(se),
+	), nil
 }
 
 // logSelectedPair logs the candidate pair ICE settled on, and every later
@@ -1282,7 +1290,8 @@ func (t *TelemostTransport) initPublisherPC() error {
 	if err != nil {
 		return err
 	}
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
+	se := newTelemostSettingEngine()
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine), webrtc.WithSettingEngine(se))
 	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		return fmt.Errorf("create publisher PC: %w", err)
@@ -1293,9 +1302,12 @@ func (t *TelemostTransport) initPublisherPC() error {
 	t.publishMode = parsePublishMode(os.Getenv("TELEMOST_PUBLISH"))
 
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate != nil {
-			t.sendICECandidate(candidate, "PUBLISHER")
+		if candidate == nil {
+			return
 		}
+		utils.Debugf("[Telemost] publisher candidate: %s [%s]",
+			candidate.String(), roleStr(t.isExitNode))
+		_ = t.sendICECandidate(candidate, "PUBLISHER")
 	})
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		utils.Debugf("[Telemost] publisher PC state=%s [%s]", state, roleStr(t.isExitNode))
@@ -1318,21 +1330,6 @@ func (t *TelemostTransport) initPublisherPC() error {
 	})
 	pc.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
 		utils.Debugf("[Telemost] publisher ICE gathering=%s [%s]", state, roleStr(t.isExitNode))
-	})
-	// Local candidates, logged as they are gathered.
-	//
-	// Nothing here recorded which candidate types ICE actually produced, which
-	// made a relay-only run impossible to interpret: a session that carried
-	// media proved nothing about whether TURN was involved, because host and
-	// server-reflexive candidates would have carried it either way. The type
-	// prefix here is the whole answer - relay means the TURN server is
-	// transporting, srflx means the peer's STUN address was reachable directly.
-	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate == nil {
-			return
-		}
-		utils.Debugf("[Telemost] publisher candidate: %s [%s]",
-			candidate.String(), roleStr(t.isExitNode))
 	})
 
 	// Audio transceiver. With shareCarrier=="video" (the default) the SFU
@@ -1484,7 +1481,7 @@ func (t *TelemostTransport) initPublisherPC() error {
 	}
 
 	local := pc.LocalDescription()
-	plan, err := planVideoTrack(local.SDP, t.publishMode)
+	plan, err := planVideoTrack(local.SDP, t.publishMode, t.publishKind)
 	if err != nil {
 		return fmt.Errorf("plan video track: %w", err)
 	}
@@ -1500,11 +1497,6 @@ func (t *TelemostTransport) initPublisherPC() error {
 	}
 	t.shareMID = videoMid
 
-	// The payload type a codec lands on is Pion's choice, not ours (it
-	// depends on registration order and whatever else shares the m-line),
-	// so it has to be read back out of the offer we just built rather than
-	// assumed. 96 was always VP8's payload type by coincidence of that
-	// being Pion's first-registered video codec; it is not VP9's.
 	codecShortName := strings.TrimPrefix(t.shareCodecMime, "video/")
 	codecPT, ptFound := sdpPayloadTypeFor(sendSDP, codecShortName)
 	if !ptFound {
@@ -1512,24 +1504,23 @@ func (t *TelemostTransport) initPublisherPC() error {
 			codecShortName, roleStr(t.isExitNode))
 		codecPT = 96
 	}
+	offerTrack := map[string]interface{}{
+		"kind": "DISPLAY_VIDEO", "label": "Primary Monitor", "priority": 0,
+		"dcLabel": "sharing",
+		"mid":     videoMid, "groupId": 2, "description": "",
+		"codecs": map[string]interface{}{
+			strconv.Itoa(codecPT): map[string]interface{}{
+				"channels": 0, "clockRate": 90000,
+				"mimeType": t.shareCodecMime, "sdpFmtpLine": "",
+			},
+		},
+	}
 	offerMsg := map[string]interface{}{
 		"uid": uuid.New().String(),
 		"publisherSdpOffer": map[string]interface{}{
-			"pcSeq": t.pubSeq.Load(),
-			"sdp":   sendSDP,
-			"tracks": []map[string]interface{}{
-				{
-					"kind": "DISPLAY_VIDEO", "label": "Primary Monitor", "priority": 0,
-					"dcLabel": "sharing",
-					"mid":     videoMid, "groupId": 2, "description": "",
-					"codecs": map[string]interface{}{
-						strconv.Itoa(codecPT): map[string]interface{}{
-							"channels": 0, "clockRate": 90000,
-							"mimeType": t.shareCodecMime, "sdpFmtpLine": "",
-						},
-					},
-				},
-			},
+			"pcSeq":  t.pubSeq.Load(),
+			"sdp":    sendSDP,
+			"tracks": []map[string]interface{}{offerTrack},
 		},
 	}
 	data, _ := json.Marshal(offerMsg)
@@ -2104,33 +2095,43 @@ func (t *TelemostTransport) initWebRTC() error {
 		videoTransceivers = append(videoTransceivers, tr)
 	}
 
-	// Prefer more efficient codecs: VP9 > H.264 High Profile > VP8.
-	// The SFU's offer includes all of them; without this Pion picks the first
-	// match (VP8), which caps quality. Setting preferences lets the answer
-	// select a better codec if the SFU supports it.
+	// Prefer the active shareCodecMime first (default VP8) so the SFU does not
+	// transcode or reject our publisher's raw-data keyframes.
+	allVideoPrefs := []webrtc.RTPCodecParameters{
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:  webrtc.MimeTypeVP8,
+				ClockRate: 90000,
+			},
+		},
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:    webrtc.MimeTypeVP9,
+				ClockRate:   90000,
+				SDPFmtpLine: "profile-id=0",
+			},
+		},
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:    webrtc.MimeTypeH264,
+				ClockRate:   90000,
+				SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+			},
+		},
+	}
+	var orderedPrefs []webrtc.RTPCodecParameters
+	for _, p := range allVideoPrefs {
+		if strings.EqualFold(p.MimeType, t.shareCodecMime) {
+			orderedPrefs = append(orderedPrefs, p)
+		}
+	}
+	for _, p := range allVideoPrefs {
+		if !strings.EqualFold(p.MimeType, t.shareCodecMime) {
+			orderedPrefs = append(orderedPrefs, p)
+		}
+	}
 	for _, tr := range videoTransceivers {
-		if err := tr.SetCodecPreferences([]webrtc.RTPCodecParameters{
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:    webrtc.MimeTypeVP9,
-					ClockRate:   90000,
-					SDPFmtpLine: "profile-id=0",
-				},
-			},
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:    webrtc.MimeTypeH264,
-					ClockRate:   90000,
-					SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
-				},
-			},
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:  webrtc.MimeTypeVP8,
-					ClockRate: 90000,
-				},
-			},
-		}); err != nil {
+		if err := tr.SetCodecPreferences(orderedPrefs); err != nil {
 			utils.Debugf("[Telemost] subscriber SetCodecPreferences: %v [%s]", err, roleStr(t.isExitNode))
 		}
 	}
@@ -2148,9 +2149,12 @@ func (t *TelemostTransport) initWebRTC() error {
 	t.sdpSemantics = webrtc.SDPSemanticsUnifiedPlan
 
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate != nil {
-			t.sendICECandidate(candidate, "SUBSCRIBER")
+		if candidate == nil {
+			return
 		}
+		utils.Debugf("[Telemost] subscriber candidate: %s [%s]",
+			candidate.String(), roleStr(t.isExitNode))
+		_ = t.sendICECandidate(candidate, "SUBSCRIBER")
 	})
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		utils.Debugf("[Telemost] subscriber PC state=%s [%s]", state, roleStr(t.isExitNode))
@@ -2176,17 +2180,6 @@ func (t *TelemostTransport) initWebRTC() error {
 		}
 	})
 	t.observeInboundDataChannel(pc)
-	// The subscriber's candidates matter for the same reason the publisher's
-	// do: whether an incoming track arrived over TURN or over a direct
-	// connection is only visible from the candidate types, and the two look
-	// identical in every other log line.
-	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate == nil {
-			return
-		}
-		utils.Debugf("[Telemost] subscriber candidate: %s [%s]",
-			candidate.String(), roleStr(t.isExitNode))
-	})
 	return nil
 }
 
@@ -2323,17 +2316,23 @@ func (t *TelemostTransport) handleSubscriberOffer(offer map[string]interface{}) 
 		pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 			utils.Debugf("[Telemost] 🎥 remote track: kind=%s id=%s codec=%s [%s]",
 				track.Kind(), track.ID(), track.Codec().MimeType, roleStr(t.isExitNode))
-			if track.Kind() == webrtc.RTPCodecTypeVideo && track.Codec().MimeType == webrtc.MimeTypeVP8 {
-				go t.readSharingVideoTrack(track)
+			if track.Kind() == webrtc.RTPCodecTypeVideo {
+				mime := track.Codec().MimeType
+				if mime == webrtc.MimeTypeVP8 || mime == webrtc.MimeTypeVP9 || mime == webrtc.MimeTypeH264 {
+					go t.readSharingVideoTrack(track)
+				}
 			} else if track.Kind() == webrtc.RTPCodecTypeAudio && t.shareCarrier == "audio" {
 				go t.readAudioCarrierTrack(track)
 			}
 		})
 		t.observeInboundDataChannel(pc)
 		pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-			if candidate != nil {
-				t.sendICECandidate(candidate, "SUBSCRIBER")
+			if candidate == nil {
+				return
 			}
+			utils.Debugf("[Telemost] subscriber candidate: %s [%s]",
+				candidate.String(), roleStr(t.isExitNode))
+			_ = t.sendICECandidate(candidate, "SUBSCRIBER")
 		})
 		pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 			utils.Debugf("[Telemost] subscriber PC state=%s [%s]", state, roleStr(t.isExitNode))
@@ -2390,15 +2389,22 @@ func (t *TelemostTransport) sendICECandidate(candidate *webrtc.ICECandidate, tar
 	if target == "PUBLISHER" {
 		seq = t.pubSeq.Load()
 	}
+	sdpMid := "0"
+	if init.SDPMid != nil && *init.SDPMid != "" {
+		sdpMid = *init.SDPMid
+	}
+	var mlineIdx uint16
+	if init.SDPMLineIndex != nil {
+		mlineIdx = *init.SDPMLineIndex
+	}
 	msg := map[string]interface{}{
 		"uid": uuid.New().String(),
 		"webrtcIceCandidate": map[string]interface{}{
-			"candidate":        init.Candidate,
-			"sdpMid":           *init.SDPMid,
-			"usernameFragment": *init.SDPMid,
-			"sdpMlineIndex":    *init.SDPMLineIndex,
-			"target":           target,
-			"pcSeq":            seq,
+			"candidate":     init.Candidate,
+			"sdpMid":        sdpMid,
+			"sdpMlineIndex": mlineIdx,
+			"target":        target,
+			"pcSeq":         seq,
 		},
 	}
 	data, _ := json.Marshal(msg)

@@ -270,7 +270,7 @@ type MailruDocsTransport struct {
 	ourIDs sync.Map
 
 	// authedConn counts carrier connections whose auth the server accepted.
-	// hasCookies is snapshotted at Start: comparing the 4004-kick budget
+	// hasCookies is set by ApplyCookies: comparing the 4004-kick budget
 	// (sentCount at kick time, logged in handleMessage) between anonymous and
 	// authorized sessions tells whether cookie sessions get a bigger message
 	// budget — right now rotation is tuned blind for both.

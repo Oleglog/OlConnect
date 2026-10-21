@@ -1,4 +1,4 @@
-﻿package yandex
+package yandex
 
 import (
 	"encoding/binary"
@@ -483,14 +483,40 @@ func (t *TelemostTransport) onDescriptions(v interface{}, removed bool) {
 		} else if m != nil {
 			sv, _ := m["sendVideo"].(bool)
 			ss, _ := m["sendSharing"].(bool)
-			p.streaming = sv || ss
 			if meta, ok := m["meta"].(map[string]interface{}); ok {
+				if v, ok := meta["sendVideo"].(bool); ok && v {
+					sv = true
+				}
+				if v, ok := meta["sendSharing"].(bool); ok && v {
+					ss = true
+				}
 				if n, ok := meta["name"].(string); ok {
-					p.tag, p.tagged = parseHiddenTag(n)
+					if tag, tagged := parseHiddenTag(n); tagged {
+						p.tag, p.tagged = tag, true
+					}
 				}
 				if d, ok := meta["description"].(string); ok && !p.tagged {
 					p.tag, p.tagged = parseLaneTag(d)
 				}
+			}
+			hasStreamObj := false
+			hasActiveStreams := false
+			if vid, ok := m["video"].(map[string]interface{}); ok {
+				hasStreamObj = true
+				if st, ok := vid["streams"].([]interface{}); ok && len(st) > 0 {
+					hasActiveStreams = true
+				}
+			}
+			if scr, ok := m["screenSharing"].(map[string]interface{}); ok {
+				hasStreamObj = true
+				if st, ok := scr["streams"].([]interface{}); ok && len(st) > 0 {
+					hasActiveStreams = true
+				}
+			}
+			if hasStreamObj {
+				p.streaming = hasActiveStreams
+			} else if sv || ss {
+				p.streaming = true
 			}
 			_, dis := m["disconnectedAt"]
 			p.gone = dis
@@ -512,10 +538,13 @@ func (t *TelemostTransport) onSlotsConfig(sc interface{}) {
 	}
 	b, _ := json.Marshal(sc)
 	var raw struct {
-		Offset    int                      `json:"offset"`
-		Slots     []map[string]interface{} `json:"slots"`
-		PrevSlots []map[string]interface{} `json:"prevSlots"`
-		NextSlots []map[string]interface{} `json:"nextSlots"`
+		Offset             int                      `json:"offset"`
+		Slots              []map[string]interface{} `json:"slots"`
+		VideoSlots         []map[string]interface{} `json:"videoSlots"`
+		PrevSlots          []map[string]interface{} `json:"prevSlots"`
+		PrevPageVideoSlots []map[string]interface{} `json:"prevPageVideoSlots"`
+		NextSlots          []map[string]interface{} `json:"nextSlots"`
+		NextPageVideoSlots []map[string]interface{} `json:"nextPageVideoSlots"`
 	}
 	if json.Unmarshal(b, &raw) != nil {
 		return
@@ -523,6 +552,10 @@ func (t *TelemostTransport) onSlotsConfig(sc interface{}) {
 	ids := func(es []map[string]interface{}) []string {
 		out := make([]string, len(es))
 		for i, e := range es {
+			if pid, ok := e["participantId"].(string); ok && pid != "" {
+				out[i] = pid
+				continue
+			}
 			for _, k := range []string{"participantVideoByMid", "participantScreenSharingByMid", "participant"} {
 				if p, ok := e[k].(map[string]interface{}); ok {
 					out[i], _ = p["participantId"].(string)
@@ -532,8 +565,20 @@ func (t *TelemostTransport) onSlotsConfig(sc interface{}) {
 		}
 		return out
 	}
+	curSlots := raw.VideoSlots
+	if len(curSlots) == 0 && len(raw.Slots) > 0 {
+		curSlots = raw.Slots
+	}
+	prevSlots := raw.PrevPageVideoSlots
+	if len(prevSlots) == 0 && len(raw.PrevSlots) > 0 {
+		prevSlots = raw.PrevSlots
+	}
+	nextSlots := raw.NextPageVideoSlots
+	if len(nextSlots) == 0 && len(raw.NextSlots) > 0 {
+		nextSlots = raw.NextSlots
+	}
 	ln.mu.Lock()
-	ln.view = &slotsView{offset: raw.Offset, prev: ids(raw.PrevSlots), cur: ids(raw.Slots), next: ids(raw.NextSlots)}
+	ln.view = &slotsView{offset: raw.Offset, prev: ids(prevSlots), cur: ids(curSlots), next: ids(nextSlots)}
 	utils.Debugf("[Telemost] lane %d slots: offset=%d cur=%v prev=%d next=%d target=%q", ln.index, raw.Offset,
 		shortAll(ln.view.cur), len(ln.view.prev), len(ln.view.next), short(ln.target))
 	ln.mu.Unlock()

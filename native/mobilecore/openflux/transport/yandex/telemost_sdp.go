@@ -318,6 +318,7 @@ func extraSSRC(existing map[uint32]bool) uint32 {
 type videoTrackPlan struct {
 	info    sdpInfo
 	mode    publishMode
+	kind    publishKind
 	ridSSRC map[string]uint32
 	sdp     string
 
@@ -330,14 +331,19 @@ type videoTrackPlan struct {
 // baseSSRC is the SSRC Pion negotiated; it is always the "primary" stream, so
 // in single mode it is the only one, and in simulcast mode it carries the
 // lowest layer.
-func planVideoTrack(sdpStr string, mode publishMode) (*videoTrackPlan, error) {
+func planVideoTrack(sdpStr string, mode publishMode, kind ...publishKind) (*videoTrackPlan, error) {
 	info := inspectVideoSDP(sdpStr)
 	if info.boundSSRC == 0 {
 		return nil, fmt.Errorf("telemost: no a=ssrc in the local video m-line; Pion never generated one")
 	}
 	used := map[uint32]bool{info.boundSSRC: true}
 
-	plan := &videoTrackPlan{info: info, mode: mode, ridSSRC: map[string]uint32{}}
+	pk := kindSharing
+	if len(kind) > 0 {
+		pk = kind[0]
+	}
+
+	plan := &videoTrackPlan{info: info, mode: mode, kind: pk, ridSSRC: map[string]uint32{}}
 	plan.ridSSRC[simulcastRIDs[0]] = info.boundSSRC
 
 	if mode == modeSimulcast || mode == modeDual {
@@ -415,8 +421,8 @@ func rewriteVideoSDP(sdpStr string, plan *videoTrackPlan) string {
 		if l == "a=sendrecv" || l == "a=recvonly" || l == "a=inactive" || l == "a=sendonly" {
 			if !dirFixed {
 				out = append(out, "a="+pubDir)
-				// content attribute for sendonly/sendrecv (screen share).
-				// Without it, SFU may not forward the stream at all.
+				// content attribute is only for screen share (sendonly);
+				// emit it on sendrecv too in case the SFU ignores it safely.
 				if pubDir != "recvonly" {
 					out = append(out, "a=content:speaker,main")
 				}
@@ -427,7 +433,7 @@ func rewriteVideoSDP(sdpStr string, plan *videoTrackPlan) string {
 
 		// The rid/simulcast/ssrc block goes immediately before a=msid, which is
 		// where Chrome puts it (after the last a=rtcp-fb / a=extmap).
-		if !inserted && l == "a=msid:" && plan.mode == modeSimulcast {
+		if !inserted && strings.HasPrefix(l, "a=msid:") && plan.mode == modeSimulcast {
 			out = append(out, plan.ssrcBlock()...)
 			inserted = true
 		}

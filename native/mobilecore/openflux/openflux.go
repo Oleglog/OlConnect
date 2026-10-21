@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/avito"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/bitrix24"
@@ -15,6 +16,21 @@ import (
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/transport/yandex"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/utils"
 )
+
+// SocketProtector is implemented on the Android side by VpnService.protect(fd).
+type SocketProtector interface {
+	Protect(fd int) bool
+}
+
+// SetProtector registers the Android VpnService socket protector so all
+// outbound OpenFlux TCP/UDP/WebRTC sockets bypass the VPN tunnel.
+func SetProtector(p SocketProtector) {
+	if p == nil {
+		netbind.SetProtector(nil)
+		return
+	}
+	netbind.SetProtector(p.Protect)
+}
 
 var (
 	client        = packetClient{}

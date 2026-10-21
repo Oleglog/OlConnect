@@ -1,5 +1,17 @@
 package transport
 
+import "time"
+
+// maxRoomPieceBytes is the largest payload a single room stripe piece carries:
+// it stays within uint16 wire framing (e.g. Cupsonline MaxPayloadBytes = 65535)
+// after adding the 9-byte stripe header and 1-byte piece flag, so coalesced
+// BatchedTransport frames ride as one piece instead of being chopped into
+// 1294-byte Telemost RTP fragments.
+const (
+	maxRoomPieceBytes = 65535 - stripeHeader - 1
+	roomAckInterval   = 50 * time.Millisecond
+)
+
 // StripedRoomTransport adds the reliable striped link layer to a room-based
 // carrier while keeping the carrier-specific control methods visible to the
 // manager and mobile clients.
@@ -8,11 +20,18 @@ type StripedRoomTransport struct {
 	inner Transport
 }
 
-// NewStripedRoomTransport wraps a room-based carrier in a single stripe. A
-// single lane still benefits from sequencing, reordering and retransmission.
+// NewStripedRoomTransport wraps a room-based carrier in a single stripe.
+// Because a room carrier (Avito, Cups.online) internally round-robins across
+// multiple WebSocket rooms with independent RTTs, out-of-order room arrival
+// must not trigger single-lane FIFO loss inference, and coalesced batches are
+// kept whole up to maxRoomPieceBytes.
 func NewStripedRoomTransport(inner Transport) *StripedRoomTransport {
+	st := NewStripedTransport([]Transport{inner})
+	st.ackEvery = roomAckInterval
+	st.snd.pieceBytes = maxRoomPieceBytes
+	st.snd.noOrderLoss = true
 	return &StripedRoomTransport{
-		StripedTransport: NewStripedTransport([]Transport{inner}),
+		StripedTransport: st,
 		inner:            inner,
 	}
 }

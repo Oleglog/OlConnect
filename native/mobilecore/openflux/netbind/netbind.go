@@ -23,17 +23,53 @@ import (
 
 type controlFunc = func(network, address string, c syscall.RawConn) error
 
-var current atomic.Pointer[controlFunc]
+var (
+	currentBind    atomic.Pointer[controlFunc]
+	currentProtect atomic.Pointer[func(fd int) bool]
+)
 
-// control applies the current binding, if any.
+// control applies the current interface binding and/or Android VpnService
+// socket protector, if any.
 func control(network, address string, c syscall.RawConn) error {
-	if f := current.Load(); f != nil {
+	if p := currentProtect.Load(); p != nil && *p != nil {
+		protectFn := *p
+		var protectErr error
+		if err := c.Control(func(fd uintptr) {
+			if !protectFn(int(fd)) {
+				protectErr = syscall.EPERM
+			}
+		}); err != nil {
+			return err
+		}
+		if protectErr != nil {
+			return protectErr
+		}
+	}
+	if f := currentBind.Load(); f != nil && *f != nil {
 		return (*f)(network, address, c)
 	}
 	return nil
 }
 
-// Dialer is a net.Dialer that follows the binding.
+// SetProtector registers an Android VpnService.protect(fd) callback and hooks
+// default HTTP, WebSocket, and DNS dialers so all outbound OpenFlux sockets
+// bypass the VPN tunnel.
+func SetProtector(protect func(fd int) bool) {
+	if protect == nil {
+		currentProtect.Store(nil)
+		return
+	}
+	currentProtect.Store(&protect)
+	installDefaults()
+}
+
+// HasProtector reports whether an Android socket protector is registered.
+func HasProtector() bool {
+	p := currentProtect.Load()
+	return p != nil && *p != nil
+}
+
+// Dialer is a net.Dialer that follows the binding and socket protector.
 func Dialer(timeout time.Duration) *net.Dialer {
 	return Wrap(&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second})
 }
@@ -57,13 +93,56 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 	return Dialer(30*time.Second).DialContext(ctx, network, address)
 }
 
-// Bound reports whether sockets are bound to an interface now.
-func Bound() bool { return current.Load() != nil }
+// WrapListenConfig makes lc follow the binding and socket protector (keeping its own Control, if any).
+func WrapListenConfig(lc *net.ListenConfig) *net.ListenConfig {
+	if lc == nil {
+		lc = &net.ListenConfig{}
+	}
+	own := lc.Control
+	lc.Control = func(network, address string, c syscall.RawConn) error {
+		if own != nil {
+			if err := own(network, address, c); err != nil {
+				return err
+			}
+		}
+		return control(network, address, c)
+	}
+	return lc
+}
 
-// install sets the binding and points the standard library's defaults at
-// bound dialers, so code that never names a dialer is covered too.
-func install(f controlFunc) {
-	current.Store(&f)
+// ListenPacket opens a UDP/packet socket with the current binding and
+// VpnService protector applied before bind.
+func ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	lc := net.ListenConfig{Control: control}
+	return lc.ListenPacket(ctx, network, address)
+}
+
+// DiscoverLocalIPv4 performs a kernel UDP route lookup using a protected socket
+// to determine the primary non-tunnel outbound IPv4 address. Useful on Android 11+
+// where netlink interface enumeration is blocked by SELinux.
+func DiscoverLocalIPv4() net.IP {
+	for _, target := range []string{"77.88.8.8:80", "1.1.1.1:80", "8.8.8.8:80"} {
+		conn, err := Dialer(2*time.Second).Dial("udp4", target)
+		if err != nil {
+			continue
+		}
+		laddr, _ := conn.LocalAddr().(*net.UDPAddr)
+		_ = conn.Close()
+		if laddr != nil && laddr.IP != nil && !laddr.IP.IsLoopback() && !laddr.IP.IsUnspecified() {
+			if ip4 := laddr.IP.To4(); ip4 != nil {
+				return ip4
+			}
+		}
+	}
+	return nil
+}
+
+// Bound reports whether sockets are bound to an interface or protected now.
+func Bound() bool {
+	return currentBind.Load() != nil || currentProtect.Load() != nil
+}
+
+func installDefaults() {
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		t.DialContext = DialContext
 	}
@@ -75,3 +154,11 @@ func install(f controlFunc) {
 		},
 	}
 }
+
+// install sets the binding and points the standard library's defaults at
+// bound dialers, so code that never names a dialer is covered too.
+func install(f controlFunc) {
+	currentBind.Store(&f)
+	installDefaults()
+}
+

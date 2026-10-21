@@ -1,4 +1,4 @@
-﻿package transport
+package transport
 
 import (
 	"encoding/binary"
@@ -63,8 +63,9 @@ type StripedTransport struct {
 	watched map[string]bool
 	watchAt time.Time
 
-	snd sender
-	asm []byte // frame being reassembled (delivery goroutine only)
+	snd      sender
+	asm      []byte // frame being reassembled (delivery goroutine only)
+	ackEvery time.Duration
 
 	ackSent, ackRecv atomic.Uint64
 
@@ -192,7 +193,7 @@ func NewStripedTransportAuto(lanes []Transport, src LaneSource, maxLanes int, au
 		maxLanes = maxStripeLanes
 	}
 	s := &StripedTransport{lanes: lanes, readyAt: make([]time.Time, len(lanes)), src: src,
-		maxLanes: maxLanes, scale: autoscale, done: make(chan struct{})}
+		maxLanes: maxLanes, scale: autoscale, ackEvery: ackInterval, done: make(chan struct{})}
 	s.snd.init()
 	s.ro = newReorderBuffer(s.deliverPiece)
 	if src != nil {
@@ -470,7 +471,11 @@ func (s *StripedTransport) onLane(lane int, b []byte) {
 // ackLoop sends the receiver's state to the sender: every ackInterval while
 // new pieces arrive, and at least every 4 intervals while a hole is open.
 func (s *StripedTransport) ackLoop() {
-	t := time.NewTicker(ackInterval)
+	every := s.ackEvery
+	if every <= 0 {
+		every = ackInterval
+	}
+	t := time.NewTicker(every)
 	defer t.Stop()
 	var lastGen uint64
 	var lastAt time.Time
@@ -480,7 +485,7 @@ func (s *StripedTransport) ackLoop() {
 			return
 		case now := <-t.C:
 			gen, holes, ok := s.ro.ackState()
-			if !ok || (gen == lastGen && (!holes || now.Sub(lastAt) < 4*ackInterval)) {
+			if !ok || (gen == lastGen && (!holes || now.Sub(lastAt) < 4*every)) {
 				continue
 			}
 			lastGen, lastAt = gen, now
@@ -781,6 +786,9 @@ type sender struct {
 	minRTT       time.Duration
 	minRTTAt     time.Time
 	triesLogAt   time.Time
+
+	pieceBytes  int  // max payload bytes per piece (defaults to stripePieceBytes)
+	noOrderLoss bool // when true, disable single-lane FIFO out-of-order loss inference
 }
 
 type queuedFrame struct {
@@ -812,6 +820,14 @@ func (q *sender) init() {
 	// receiver still keeps for its previous run.
 	q.seq = mrand.Uint32()
 	q.low = q.seq + 1
+	q.pieceBytes = stripePieceBytes
+}
+
+func (q *sender) maxPieceBytes() int {
+	if q.pieceBytes > 0 {
+		return q.pieceBytes
+	}
+	return stripePieceBytes
 }
 
 // enqueue adds a frame to the send queue; false if the queue is full.
@@ -845,10 +861,12 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 		q.ack = nil
 	}
 	ls := &q.lane[i]
-	if allowed := ls.allow(now); max-len(out) > allowed {
-		max = len(out) + allowed
+	if !q.noOrderLoss {
+		if allowed := ls.allow(now); max-len(out) > allowed {
+			max = len(out) + allowed
+		}
 	}
-	dead := ls.dead(now) && q.othersAlive(i, now)
+	dead := !q.noOrderLoss && ls.dead(now) && q.othersAlive(i, now)
 	if dead {
 		if now.Sub(ls.deliveredAt) < deadKeepWarm {
 			// Keep the lane's stream going, with copies of what is in
@@ -1012,9 +1030,10 @@ func (q *sender) nextPiece(now time.Time) []byte {
 		}
 		q.cur, q.curStarted = f, false
 	}
+	limit := q.maxPieceBytes()
 	n := len(q.cur)
-	if n > stripePieceBytes {
-		n = stripePieceBytes
+	if n > limit {
+		n = limit
 	}
 	flag := byte(0)
 	if q.curStarted {
@@ -1054,7 +1073,7 @@ func (q *sender) dequeue(now time.Time) ([]byte, bool) {
 
 func (q *sender) codelShouldDrop(sojourn time.Duration, now time.Time) bool {
 	okToDrop := false
-	if sojourn < codelTarget || q.queueBytes < 2*stripePieceBytes {
+	if sojourn < codelTarget || q.queueBytes < 2*q.maxPieceBytes() {
 		q.codelFirstAbove = time.Time{}
 	} else if q.codelFirstAbove.IsZero() {
 		q.codelFirstAbove = now.Add(codelInterval)
@@ -1224,7 +1243,7 @@ func (q *sender) detectLocked(now time.Time) bool {
 		if e.queued {
 			continue
 		}
-		byLane := q.laneAck[e.lane] > e.laneIdx+laneReorderSlack
+		byLane := !q.noOrderLoss && q.laneAck[e.lane] > e.laneIdx+laneReorderSlack
 		if !byLane {
 			wait := rto << min(max(int(e.tries)-1, 0), 1)
 			if now.Sub(e.at) < wait {

@@ -1,4 +1,4 @@
-﻿package yandex
+package yandex
 
 // Custom RTP sender for the Telemost publisher track.
 //

@@ -50,3 +50,41 @@ func TestStripedRoomTransportForwardsControlMethods(t *testing.T) {
 		t.Fatalf("PreferredBatchBytes() = %d, want 1234", got)
 	}
 }
+
+func TestStripedRoomTransportPreservesLargeBatchAndHandlesOutOfOrderRooms(t *testing.T) {
+	innerA := &roomTransportStub{}
+	innerB := &roomTransportStub{}
+	tx := NewStripedRoomTransport(innerA)
+
+	// Large 16 KB batch should not be split into 1294-byte Telemost pieces.
+	large := make([]byte, 16000)
+	for i := range large {
+		large[i] = byte(i)
+	}
+	if err := tx.Send(large); err != nil {
+		t.Fatalf("tx.Send(large): %v", err)
+	}
+	frames := tx.pull(0, 64)
+	if len(frames) != 1 {
+		t.Fatalf("16 KB batch split into %d pieces, want 1", len(frames))
+	}
+
+	// Simulate 4 pieces sent across 4 parallel rooms where room 3 finishes first.
+	tx2 := NewStripedRoomTransport(innerA)
+	rx2 := NewStripedRoomTransport(innerB)
+	for i := 0; i < 4; i++ {
+		if err := tx2.Send([]byte{byte(i + 1)}); err != nil {
+			t.Fatalf("tx2.Send(%d): %v", i, err)
+		}
+	}
+	sent := tx2.pull(0, 64)
+	if len(sent) != 4 {
+		t.Fatalf("pulled %d pieces, want 4", len(sent))
+	}
+	// Deliver piece 4 to rx2 first (out-of-order room completion) and feed its ACK to tx2.
+	rx2.onLane(0, sent[3])
+	ack := rx2.ro.ackFrame()
+	if queuedRtx := tx2.snd.onAck(ack, tx2.snd.ring[tx2.snd.seq%txRingSize].at); queuedRtx {
+		t.Fatalf("out-of-order room ACK falsely queued retransmissions for in-flight rooms")
+	}
+}

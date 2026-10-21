@@ -56,6 +56,7 @@ func SetProtector(value SocketProtector) {
 	protector = value
 	mu.Unlock()
 	olcrtc.SetProtector(value)
+	openflux.SetProtector(value)
 }
 
 func SetLogWriter(value LogWriter) {

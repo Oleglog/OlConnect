@@ -12,6 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/net/proxy"
+
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
 )
 
 var (
@@ -52,7 +54,7 @@ func GetSignalingProxyDialer() proxy.Dialer {
 }
 
 // GetSignalingHTTPTransport returns an http.Transport strictly using the signaling proxy if set,
-// or reading from the environment.
+// or reading from the environment, with netbind socket protection applied.
 func GetSignalingHTTPTransport() *http.Transport {
 	if signalingProxyDialer != nil {
 		return &http.Transport{
@@ -64,11 +66,8 @@ func GetSignalingHTTPTransport() *http.Transport {
 		}
 	}
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   15 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         netbind.Dialer(15 * time.Second).DialContext,
 		TLSHandshakeTimeout: 15 * time.Second,
 		ForceAttemptHTTP2:   true,
 	}
@@ -76,10 +75,13 @@ func GetSignalingHTTPTransport() *http.Transport {
 
 // ConfigureWebsocketDialerProxy configures proxy settings on a gorilla websocket.Dialer.
 // If an explicit signaling proxy was set via SetSignalingProxy, it strictly enforces it.
-// Otherwise it checks environment variables for targetURL.
+// Otherwise it checks environment variables for targetURL and ensures netbind.DialContext is set.
 func ConfigureWebsocketDialerProxy(dialer *websocket.Dialer, targetURL string) {
 	if dialer == nil {
 		return
+	}
+	if dialer.NetDialContext == nil {
+		dialer.NetDialContext = netbind.DialContext
 	}
 	if signalingProxyDialer != nil {
 		dialer.NetDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -111,7 +113,7 @@ func ConfigureWebsocketDialerProxy(dialer *websocket.Dialer, targetURL string) {
 
 	switch strings.ToLower(proxyURL.Scheme) {
 	case "socks5", "socks5h":
-		forward := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+		forward := netbind.Dialer(10 * time.Second)
 		socksDialer, err := proxy.FromURL(proxyURL, forward)
 		if err != nil {
 			log.Printf("[PROXY] Failed to create SOCKS5 dialer for %s: %v", proxyURL.Redacted(), err)
@@ -143,6 +145,6 @@ func CreateSocks5Dialer(proxyAddr string, timeout time.Duration) (proxy.Dialer, 
 	if err != nil {
 		return nil, fmt.Errorf("invalid proxy URL %q: %w", proxyAddr, err)
 	}
-	forward := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
+	forward := netbind.Dialer(timeout)
 	return proxy.FromURL(u, forward)
 }

@@ -1,4 +1,4 @@
-﻿package cupsonline
+package cupsonline
 
 import (
 	"bytes"
