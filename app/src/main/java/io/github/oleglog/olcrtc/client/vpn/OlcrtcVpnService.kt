@@ -671,10 +671,12 @@ class OlcrtcVpnService : VpnService() {
 
     private fun protectAndBindSocket(fd: Int): Boolean {
         if (!protect(fd)) return false
-        val network = activeNetwork ?: return false
+        val network = activeNetwork
+            ?: connectivity.activeNetwork?.takeIf(::isUnderlyingNetwork)?.also { activeNetwork = it }
+            ?: return true
         val duplicate = runCatching { ParcelFileDescriptor.fromFd(fd) }.getOrElse {
             diagnostics.append("warning", "socket route bind failed")
-            return false
+            return true
         }
         return runCatching {
             network.bindSocket(duplicate.fileDescriptor)
@@ -686,7 +688,7 @@ class OlcrtcVpnService : VpnService() {
         }.getOrElse {
             runCatching { duplicate.close() }
             diagnostics.append("warning", "socket route bind failed")
-            false
+            true
         }
     }
 

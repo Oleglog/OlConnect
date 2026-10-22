@@ -548,9 +548,14 @@ func (t *MailruDocsTransport) dialAndAuth(userID string, writeQueue chan []byte)
 		return nil, fmt.Errorf("fetchDocInfo: %w", err)
 	}
 
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+
 	dialer := &websocket.Dialer{
 		EnableCompression: true,
 		HandshakeTimeout:  15 * time.Second,
+		Jar:               jar,
 	}
 	utils.ConfigureWebsocketDialerProxy(dialer, info.WsURL)
 	headers := http.Header{}
@@ -1001,6 +1006,7 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 				utils.Debugf("[M-DOCS] authChangesAck write error: %v", err)
 				return
 			}
+			utils.Debugf("[M-DOCS] authChanges received and acked (co-editing ready)")
 			session.markReady()
 		}
 		return
@@ -1431,20 +1437,28 @@ func (t *MailruDocsTransport) ApplyCookies(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
-	u, _ := url.Parse("https://cloud.mail.ru/")
 	jar, _ := cookiejar.New(nil)
-	cookies := make([]*http.Cookie, 0, len(values))
+	mailruCookies := make([]*http.Cookie, 0, len(values))
+	datacloudCookies := make([]*http.Cookie, 0, len(values))
 	for k, v := range values {
-		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
+		mailruCookies = append(mailruCookies, &http.Cookie{Name: k, Value: v, Path: "/", Domain: "mail.ru"})
+		datacloudCookies = append(datacloudCookies, &http.Cookie{Name: k, Value: v, Path: "/", Domain: "datacloudmail.ru"})
 	}
-	jar.SetCookies(u, cookies)
+	for _, rawURL := range []string{"https://mail.ru/", "https://cloud.mail.ru/", "https://docs.mail.ru/"} {
+		if u, err := url.Parse(rawURL); err == nil {
+			jar.SetCookies(u, mailruCookies)
+		}
+	}
+	if u, err := url.Parse("https://docs.datacloudmail.ru/"); err == nil {
+		jar.SetCookies(u, datacloudCookies)
+	}
 
 	t.jarMu.Lock()
 	t.cookieJar = jar
 	t.jarMu.Unlock()
 	t.hasCookies.Store(true)
 
-	utils.Debugf("[M-DOCS] applied %d cookies, forcing reconnect", len(cookies))
+	utils.Debugf("[M-DOCS] applied %d cookies, forcing reconnect", len(values))
 
 	t.Mu.Lock()
 	session := t.session

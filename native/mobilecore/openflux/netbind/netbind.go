@@ -33,16 +33,10 @@ var (
 func control(network, address string, c syscall.RawConn) error {
 	if p := currentProtect.Load(); p != nil && *p != nil {
 		protectFn := *p
-		var protectErr error
 		if err := c.Control(func(fd uintptr) {
-			if !protectFn(int(fd)) {
-				protectErr = syscall.EPERM
-			}
+			_ = protectFn(int(fd))
 		}); err != nil {
 			return err
-		}
-		if protectErr != nil {
-			return protectErr
 		}
 	}
 	if f := currentBind.Load(); f != nil && *f != nil {
@@ -52,15 +46,17 @@ func control(network, address string, c syscall.RawConn) error {
 }
 
 // SetProtector registers an Android VpnService.protect(fd) callback and hooks
-// default HTTP, WebSocket, and DNS dialers so all outbound OpenFlux sockets
-// bypass the VPN tunnel.
+// default HTTP and WebSocket dialers so all outbound OpenFlux sockets bypass
+// the VPN tunnel. Note: we intentionally do NOT replace net.DefaultResolver
+// with PreferGo: true on Android because Android has no /etc/resolv.conf and
+// relies on the native cgo/bionic getaddrinfo resolver.
 func SetProtector(protect func(fd int) bool) {
 	if protect == nil {
 		currentProtect.Store(nil)
 		return
 	}
 	currentProtect.Store(&protect)
-	installDefaults()
+	installTransportDefaults()
 }
 
 // HasProtector reports whether an Android socket protector is registered.
@@ -142,11 +138,15 @@ func Bound() bool {
 	return currentBind.Load() != nil || currentProtect.Load() != nil
 }
 
-func installDefaults() {
+func installTransportDefaults() {
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		t.DialContext = DialContext
 	}
 	websocket.DefaultDialer.NetDialContext = DialContext
+}
+
+func installDefaults() {
+	installTransportDefaults()
 	net.DefaultResolver = &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {

@@ -102,12 +102,25 @@ func detectTransport(docURL string) string {
 	if strings.Contains(docURL, "bitrix24") {
 		return "bitrix24"
 	}
+	if !strings.Contains(docURL, "://") && strings.HasPrefix(strings.TrimSpace(docURL), "Wy") {
+		return "cupsonline"
+	}
 
 	// Volga is strictly used on /edit/d/ documents
 	if strings.Contains(docURL, "/edit/d/") {
 		return "vyandex"
 	}
 	return "yandex"
+}
+
+func encryptionContext(detected, docURL string) string {
+	switch detected {
+	case "cupsonline", "cups":
+		return "cupsonline"
+	case "avito":
+		return "avito"
+	}
+	return docURL
 }
 
 func Start(documentURL string, transportType string) string {
@@ -182,7 +195,7 @@ func Start(documentURL string, transportType string) string {
 	}
 	if key != "" {
 		appendLog("[ANDROID] Включение сквозного шифрования AES-256-GCM")
-		encTrans, err := transport.NewEncryptedTransport(innerTrans, key, documentURL, false)
+		encTrans, err := transport.NewEncryptedTransport(innerTrans, key, encryptionContext(detected, documentURL), false)
 		if err != nil {
 			appendLog(fmt.Sprintf("[ANDROID] Ошибка настройки шифрования: %v", err))
 			client.mu.Lock()
@@ -280,11 +293,16 @@ func applySessionCookies(t cookieApplier) {
 }
 
 // parseSessionCookies accepts "a=b; c=d" and Netscape cookies.txt lines
-// (domain\t...\tname\tvalue), skipping comments and expired entries.
+// (domain\t...\tname\tvalue), including #HttpOnly_ rows.
 func parseSessionCookies(raw string) map[string]string {
 	out := make(map[string]string)
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if strings.HasPrefix(line, "#HttpOnly_") {
+			line = strings.TrimPrefix(line, "#HttpOnly_")
+		} else if strings.HasPrefix(line, "#httponly_") {
+			line = strings.TrimPrefix(line, "#httponly_")
+		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
