@@ -525,9 +525,20 @@ func parseRoomList(rawURL string) []string {
 				return ids
 			}
 		}
+		path := strings.Trim(u.Path, "/")
+		if path != "" {
+			parts := strings.Split(path, "/")
+			lastPart := parts[len(parts)-1]
+			if lastPart != "" && lastPart != "room" && lastPart != "code" {
+				return []string{lastPart, lastPart}
+			}
+		}
 	}
 	if ids, err := unpackRooms(rawURL); err == nil {
 		return ids
+	}
+	if !strings.Contains(rawURL, "/") && !strings.Contains(rawURL, "?") {
+		return []string{rawURL, rawURL}
 	}
 	return nil
 }
@@ -560,6 +571,9 @@ func (t *AvitoTransport) Start() error {
 	}
 	if t.ctx.Err() != nil {
 		return errStopped
+	}
+	if len(allIDs) == 1 {
+		allIDs = []string{allIDs[0], allIDs[0]}
 	}
 
 	// Split rooms: first half = exit-tx (exit writes, client reads),

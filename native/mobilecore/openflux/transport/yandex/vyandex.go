@@ -72,10 +72,10 @@ func DefaultVolgaConfig() VolgaConfig {
 		WorkerCount: 1,
 		QueueSize:   1000000,
 
-		BatchSize:        20,
-		BatchTimeout:     50 * time.Millisecond,
-		BatchMaxBytes:    4 * 1024 * 1024,
-		RequestInterval:  250 * time.Millisecond,
+		BatchSize:        10,
+		BatchTimeout:     20 * time.Millisecond,
+		BatchMaxBytes:    24 * 1024,
+		RequestInterval:  20 * time.Millisecond,
 		RateLimitMaxDelay: 5 * time.Second,
 
 		MaxPayloadBytes: (1 << 16) - 1,
@@ -105,7 +105,8 @@ func SlimVolgaConfig() VolgaConfig {
 	c.MaxIdleConns = 16
 	c.WorkerCount = 1
 	c.QueueSize = 4096
-	c.BatchMaxBytes = 256 * 1024
+	c.BatchMaxBytes = 24 * 1024
+	c.RequestInterval = 30 * time.Millisecond
 	c.WSReadBufferSize = 128 << 10
 	c.WSWriteBufferSize = 128 << 10
 	return c

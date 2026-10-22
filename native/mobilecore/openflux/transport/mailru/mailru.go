@@ -392,7 +392,7 @@ func (t *MailruDocsTransport) PreferredBatchBytes() int { return mailruPreferred
 // download. 5/s still far exceeds the real send rate the server throttle allows
 // (~1-2 x 500 KB batches/s), so it does not cap throughput. 0 disables pacing.
 // OPENFLUX_MAILRU_MSG_INTERVAL_MS overrides it.
-const defaultMailruMsgIntervalMs = 200
+const defaultMailruMsgIntervalMs = 15
 
 var mailruMsgInterval = func() time.Duration {
 	n := defaultMailruMsgIntervalMs
@@ -405,21 +405,8 @@ var mailruMsgInterval = func() time.Duration {
 }()
 
 // defaultMailruRotateMs is the connection age at which the carrier WebSocket is
-// preemptively rotated make-before-break (see rotateCarrier/rotationLoop). The
-// R7 server drops an anonymous editor's socket at a fixed age under load —
-// ~45s, matching Engine.IO pingInterval 25s + pingTimeout 20s — and that drop
-// stalls the single-lane tunnel ("отваливается под нагрузкой"). Neither send
-// pacing nor decoupling the reader stopped it (the receive-queue drops stayed
-// 0, so the reader was never blocked), which points at the server kick rather
-// than a client stall. Rotating a fresh connection in before the old one is
-// ever kicked keeps every connection well under that age, so the tunnel never
-// waits on the kick. 25s leaves a wide margin under ~45s (room for a slow or
-// retried rotation to finish before the kick) while keeping the editor-API
-// connect rate low (~2-3/min) to stay under its throttle. rotationLoop retries
-// a failed rotation every couple of seconds, so a transient API hiccup does not
-// let the old connection reach the kick. 0 disables rotation.
-// OPENFLUX_MAILRU_ROTATE_MS overrides it.
-const defaultMailruRotateMs = 25000
+// preemptively rotated make-before-break (see rotateCarrier/rotationLoop).
+const defaultMailruRotateMs = 120000
 
 var mailruRotateInterval = func() time.Duration {
 	n := defaultMailruRotateMs
@@ -432,26 +419,12 @@ var mailruRotateInterval = func() time.Duration {
 }()
 
 // mailruRotateAuthWait bounds how long a rotation waits for the server to accept
-// the new connection's auth before swapping sends onto it. A healthy auth
-// round-trip is well under a second; the cap only guards against a stuck new
-// connection (then we swap anyway and let the normal drop/reconnect recover).
+// the new connection's auth before swapping sends onto it.
 const mailruRotateAuthWait = 8 * time.Second
 
 // defaultMailruRotateMsgs rotates the carrier make-before-break once this many
-// chat frames have been written on it, staying under the R7 server's anti-abuse
-// budget. The server cuts the connection with disconnectReason 4004 ("access
-// deny") when that budget is spent — it behaves like a message token bucket of
-// capacity ~80-90 (measured live, d14<->212 8x download: a connection sending
-// in a burst was cut at 81-91 messages in ~4 s; a slower one lasted to ~160-220
-// over tens of seconds as the bucket refilled). 60 keeps a margin under the
-// worst-case ~80 capacity even allowing for the handful of extra messages sent
-// while a rotation is still being set up. Paired with the send pacing above
-// (which stops a retransmit burst from blowing the bucket mid-rotation), this
-// took the exit's 4004 cuts under an 8x download from ~11 per run to 0. At
-// ~1-2 x 500 KB batches/s under the server throttle it rotates roughly every
-// 30-60 s. 0 disables count-based rotation (time only).
-// OPENFLUX_MAILRU_ROTATE_MSGS overrides it.
-const defaultMailruRotateMsgs = 60
+// chat frames have been written on it.
+const defaultMailruRotateMsgs = 500
 
 var mailruRotateMsgs = func() int64 {
 	n := int64(defaultMailruRotateMsgs)
@@ -720,7 +693,7 @@ func (t *MailruDocsTransport) rotationLoop() {
 		case <-t.Done():
 			return
 		case <-tick.C:
-			if !t.IsRunning() || !t.IsConnected() {
+			if !t.IsRunning() || !t.IsConnected() || t.hasCookies.Load() {
 				continue
 			}
 			start := t.sessionStart.Load()
