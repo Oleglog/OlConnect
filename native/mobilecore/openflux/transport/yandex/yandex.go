@@ -36,7 +36,6 @@ var ErrLoginRequired = errors.New("yandex docs: login required")
 // rather than classic ONLYOFFICE (officeActionData.balancer_url missing, action_url present).
 var ErrVolgaDetected = errors.New("yandex docs: volga editor document detected")
 
-
 // Precompiled once. cursorPayloadRe in particular runs on every inbound
 // message, so compiling it per call (as before) was pure overhead on the hot
 // receive path.
@@ -328,7 +327,6 @@ func (t *YandexDocsTransport) Receive(callback func([]byte)) {
 		vd.Receive(callback)
 	}
 }
-
 
 func (t *YandexDocsTransport) connectToDoc(attempt int) {
 	if !t.IsRunning() {

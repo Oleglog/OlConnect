@@ -26,7 +26,7 @@ import (
 var baseURL = "https://code.avito.ru"
 
 const (
-	avitoUA    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+	avitoUA     = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 	shareDBType = "http://sharejs.org/types/textv1"
 )
 
@@ -75,7 +75,7 @@ func DefaultAvitoConfig() AvitoConfig {
 		MaxMessageBytes: 8 << 20,
 
 		NumRooms:        4,
-		RoomCreatePause: 300 * time.Millisecond,
+		RoomCreatePause: 100 * time.Millisecond,
 
 		StatsInterval: 5 * time.Second,
 	}
@@ -101,6 +101,11 @@ func createRoom(ctx context.Context, cookies string) (string, error) {
 	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/web/1/code/room", bytes.NewReader(nil))
 	req.Header.Set("User-Agent", avitoUA)
 	req.Header.Set("Origin", baseURL)
+	req.Header.Set("Referer", baseURL+"/")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	if strings.TrimSpace(cookies) != "" {
+		req.Header.Set("Cookie", strings.TrimSpace(cookies))
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("POST room: %w", err)
@@ -656,17 +661,17 @@ func (t *AvitoTransport) enterRooms() ([]string, error) {
 			if wait > 15*time.Second {
 				wait = 15 * time.Second
 			}
-			utils.Debugf("[AVITO] room %d attempt %d failed: %v (wait %v)", i+1, attempt+1, lastErr, wait)
+			utils.Infof("[AVITO] room %d attempt %d failed: %v (wait %v)", i+1, attempt+1, lastErr, wait)
 			if !sleepCtx(t.ctx, wait) {
 				return nil, errStopped
 			}
 		}
 		if roomID == "" {
-			utils.Debugf("[AVITO] room %d skipped: %v", i+1, lastErr)
+			utils.Infof("[AVITO] room %d skipped: %v", i+1, lastErr)
 			continue
 		}
 		ids = append(ids, roomID)
-		utils.Debugf("[AVITO] created room %d/%d: %s", i+1, total, roomID[:8])
+		utils.Infof("[AVITO] created room %d/%d: %s", i+1, total, roomID[:8])
 		if i < total-1 {
 			if !sleepCtx(t.ctx, t.config.RoomCreatePause) {
 				return nil, errStopped

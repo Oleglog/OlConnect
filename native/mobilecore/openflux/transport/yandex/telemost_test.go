@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/pion/webrtc/v4"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
+	"github.com/pion/webrtc/v4"
 )
 
 func TestPlanVideoTrackPreservesBundleAndExtractSDPUfrag(t *testing.T) {

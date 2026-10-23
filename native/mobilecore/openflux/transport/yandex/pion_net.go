@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
 	"github.com/pion/transport/v4"
 	"github.com/pion/transport/v4/stdnet"
 	"github.com/pion/webrtc/v4"
-	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux/netbind"
 )
 
 // newTelemostSettingEngine configures Pion's SettingEngine so all WebRTC
@@ -151,7 +151,7 @@ func (n *boundPionNet) ListenUDP(network string, locAddr *net.UDPAddr) (transpor
 }
 
 func (n *boundPionNet) Dial(network, address string) (net.Conn, error) {
-	return netbind.Dialer(30 * time.Second).Dial(network, address)
+	return netbind.Dialer(30*time.Second).Dial(network, address)
 }
 
 func (n *boundPionNet) DialUDP(network string, laddr, raddr *net.UDPAddr) (transport.UDPConn, error) {

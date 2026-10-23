@@ -33,12 +33,12 @@ func SetProtector(p SocketProtector) {
 }
 
 var (
-	client        = packetClient{}
-	encKeyMu      sync.Mutex
-	encryptionKey string
-	codecMu       sync.Mutex
-	currentCodec  = "batched"
-	cookiesMu     sync.Mutex
+	client         = packetClient{}
+	encKeyMu       sync.Mutex
+	encryptionKey  string
+	codecMu        sync.Mutex
+	currentCodec   = "batched"
+	cookiesMu      sync.Mutex
 	sessionCookies string
 )
 
@@ -159,29 +159,29 @@ func Start(documentURL string, transportType string) string {
 	case "mailru":
 		appendLog("[ANDROID] Запуск транспорта Mail.ru Docs")
 		mr := mailru.NewMailruDocsTransport(documentURL, config)
-		applySessionCookies(mr)
+		applySessionCookiesForDomain(mr, "mail.ru")
 		innerTrans = mr
 	case "avito":
 		appendLog("[ANDROID] Обнаружен сервис Avito. Запуск транспорта avito")
-		innerTrans = transport.NewStripedRoomTransport(avito.NewAvitoTransport(documentURL, config, sessionCookieHeader(), true))
+		innerTrans = transport.NewStripedRoomTransport(avito.NewAvitoTransport(documentURL, config, sessionCookieHeaderForDomain("avito.ru"), true))
 	case "cupsonline", "cups":
 		appendLog("[ANDROID] Обнаружен сервис Cups.online. Запуск транспорта cupsonline")
 		innerTrans = transport.NewStripedRoomTransport(cupsonline.NewCupsonlineTransport(documentURL, config, true))
 	case "telemost":
 		appendLog("[ANDROID] Обнаружена конференция Telemost. Запуск транспорта telemost")
-		innerTrans = yandex.NewStripedTelemostTransport(sessionCookieHeader(), documentURL, false, config)
+		innerTrans = yandex.NewStripedTelemostTransport(sessionCookieHeaderForDomain("yandex.ru"), documentURL, false, config)
 	case "bitrix24", "b24":
 		appendLog("[ANDROID] Обнаружен сервис Bitrix24. Запуск транспорта bitrix24")
-		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, sessionCookieHeader(), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
+		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, sessionCookieHeaderForDomain("bitrix"), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
 	case "vyandex", "volga":
 		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
 		vt := yandex.NewYandexVolgaTransportWithConfig(documentURL, config, yandex.SlimVolgaConfig())
-		applySessionCookies(vt)
+		applySessionCookiesForDomain(vt, "yandex.ru")
 		innerTrans = vt
 	default:
 		appendLog("[ANDROID] Запуск классического транспорта yandex")
 		yt := yandex.NewYandexDocsTransport(documentURL, config)
-		applySessionCookies(yt)
+		applySessionCookiesForDomain(yt, "yandex.ru")
 		innerTrans = yt
 	}
 
@@ -251,14 +251,19 @@ func Start(documentURL string, transportType string) string {
 // plain string (avito, telemost, bitrix24). Netscape cookies.txt lines are
 // reduced to their name=value pairs.
 func sessionCookieHeader() string {
+	return sessionCookieHeaderForDomain("")
+}
+
+func sessionCookieHeaderForDomain(domainFilter string) string {
 	cookiesMu.Lock()
 	raw := sessionCookies
 	cookiesMu.Unlock()
 	if strings.TrimSpace(raw) == "" {
 		return ""
 	}
-	parts := make([]string, 0, len(parseSessionCookies(raw)))
-	for name, value := range parseSessionCookies(raw) {
+	parsed := parseSessionCookiesForDomain(raw, domainFilter)
+	parts := make([]string, 0, len(parsed))
+	for name, value := range parsed {
 		parts = append(parts, name+"="+value)
 	}
 	sort.Strings(parts)
@@ -274,13 +279,17 @@ type cookieApplier interface {
 // pairs or Netscape cookies.txt lines) and pushes matching-domain cookies
 // into the transport. Unknown/foreign domains are ignored by each parser.
 func applySessionCookies(t cookieApplier) {
+	applySessionCookiesForDomain(t, "")
+}
+
+func applySessionCookiesForDomain(t cookieApplier, domainFilter string) {
 	cookiesMu.Lock()
 	raw := sessionCookies
 	cookiesMu.Unlock()
 	if strings.TrimSpace(raw) == "" {
 		return
 	}
-	values := parseSessionCookies(raw)
+	values := parseSessionCookiesForDomain(raw, domainFilter)
 	if len(values) == 0 {
 		appendLog("[ANDROID] Куки заданы, но ни одной пары name=value не распознано")
 		return
@@ -295,44 +304,67 @@ func applySessionCookies(t cookieApplier) {
 // parseSessionCookies accepts "a=b; c=d" and Netscape cookies.txt lines
 // (domain\t...\tname\tvalue), including #HttpOnly_ rows.
 func parseSessionCookies(raw string) map[string]string {
-	out := make(map[string]string)
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		if strings.HasPrefix(line, "#HttpOnly_") {
-			line = strings.TrimPrefix(line, "#HttpOnly_")
-		} else if strings.HasPrefix(line, "#httponly_") {
-			line = strings.TrimPrefix(line, "#httponly_")
-		}
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Split(line, "\t")
-		if len(fields) >= 7 {
-			// Netscape format: domain, subdomains, path, secure, expires, name, value.
-			name := strings.TrimSpace(fields[5])
-			value := strings.TrimSpace(fields[6])
-			if name != "" && value != "" {
-				out[name] = value
+	return parseSessionCookiesForDomain(raw, "")
+}
+
+func parseSessionCookiesForDomain(raw, domainFilter string) map[string]string {
+	domainFilter = strings.ToLower(strings.TrimSpace(domainFilter))
+	parse := func(filter string) map[string]string {
+		out := make(map[string]string)
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+			lower := strings.ToLower(line)
+			if strings.HasPrefix(lower, "#httponly_") {
+				line = line[len("#httponly_"):]
 			}
-			continue
-		}
-		for _, part := range strings.Split(line, ";") {
-			part = strings.TrimSpace(part)
-			if part == "" || strings.HasPrefix(part, "#") {
+			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			kv := strings.SplitN(part, "=", 2)
-			if len(kv) != 2 {
+			fields := strings.Split(line, "\t")
+			if len(fields) >= 7 {
+				rawDom := fields[0]
+				if strings.HasPrefix(strings.ToLower(rawDom), "#httponly_") {
+					rawDom = rawDom[len("#httponly_"):]
+				}
+				dom := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(rawDom), "."))
+				if filter != "" && !strings.Contains(dom, filter) {
+					continue
+				}
+				name := strings.TrimSpace(fields[5])
+				value := strings.TrimSpace(fields[6])
+				if name != "" && value != "" {
+					out[name] = value
+				}
 				continue
 			}
-			name := strings.TrimSpace(kv[0])
-			value := strings.TrimSpace(kv[1])
-			if name != "" && value != "" {
-				out[name] = value
+			rawLine := line
+			if strings.HasPrefix(strings.ToLower(rawLine), "cookie:") {
+				rawLine = strings.TrimSpace(rawLine[len("cookie:"):])
 			}
+			for _, part := range strings.Split(rawLine, ";") {
+				part = strings.TrimSpace(part)
+				if part == "" || strings.HasPrefix(part, "#") {
+					continue
+				}
+				kv := strings.SplitN(part, "=", 2)
+				if len(kv) != 2 {
+					continue
+				}
+				name := strings.TrimSpace(kv[0])
+				value := strings.TrimSpace(kv[1])
+				if name != "" && value != "" {
+					out[name] = value
+				}
+			}
+		}
+		return out
+	}
+	if domainFilter != "" {
+		if filtered := parse(domainFilter); len(filtered) > 0 {
+			return filtered
 		}
 	}
-	return out
+	return parse("")
 }
 
 func Stop() {

@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly AAR="${1:-$ROOT/app/libs/mobilecore.aar}"
-readonly EXPECTED_OLCRTC_VERSION="v0.0.0-20260909104030-c267dd30b0bc"
+readonly EXPECTED_OLCRTC_VERSION="v0.0.0-20261023184934-6c55df536574"
 readonly EXPECTED_OLCRTC_REPLACE="github.com/Oleglog/Olcrtc_manager"
 readonly EXPECTED_J_VERSION="v0.0.0-20260813164759-98b35e399132"
 readonly -a REQUIRED_LIBRARIES=(

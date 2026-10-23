@@ -46,12 +46,13 @@ internal object OpenFluxUri {
             OpenFluxProfile.Transport.BITRIX24 -> "OpenFlux Битрикс24"
             OpenFluxProfile.Transport.AUTO -> "OpenFlux"
         }
-        val name = if (
-            rawFragmentName == null ||
+        val isGenericFragment = rawFragmentName == null ||
+            rawFragmentName.equals("OpenFlux", ignoreCase = true) ||
+            rawFragmentName.startsWith("openflux_", ignoreCase = true) ||
             (rawFragmentName.equals("OpenFlux Yandex", ignoreCase = true) &&
                 parsedTransport != OpenFluxProfile.Transport.YANDEX &&
                 parsedTransport != OpenFluxProfile.Transport.AUTO)
-        ) {
+        val name = if (isGenericFragment) {
             defaultName
         } else {
             rawFragmentName

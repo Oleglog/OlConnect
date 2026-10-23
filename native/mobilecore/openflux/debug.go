@@ -27,4 +27,3 @@ func SetLogSink(sink func(string)) {
 func IsVerbose() bool {
 	return utils.Level() > 0
 }
-

@@ -161,4 +161,3 @@ func install(f controlFunc) {
 	currentBind.Store(&f)
 	installDefaults()
 }
-

@@ -90,10 +90,15 @@ internal class ProfileRepository(
                 "bitrix", "bitrix24" -> "Битрикс24"
                 else -> it.transport.replaceFirstChar(Char::titlecase)
             }
-            val displayName = if (it.name.equals("OpenFlux Yandex", ignoreCase = true) || it.name.equals("OpenFlux", ignoreCase = true)) {
+            val displayName = if (
+                it.name.equals("OpenFlux Yandex", ignoreCase = true) ||
+                it.name.equals("OpenFlux", ignoreCase = true) ||
+                it.name.startsWith("openflux_", ignoreCase = true)
+            ) {
                 when (it.transport.lowercase()) {
                     "mailru" -> "OpenFlux Mail.ru"
                     "vyandex" -> "OpenFlux Волга"
+                    "yandex" -> "OpenFlux Яндекс"
                     "telemost" -> "OpenFlux Телемост"
                     "cups", "cupsonline" -> "OpenFlux Cups"
                     "avito" -> "OpenFlux Авито"
@@ -128,12 +133,15 @@ internal class ProfileRepository(
         return subscriptions.getVisibleProfiles(group.groupId).map { profile ->
             val imported = runCatching { profile.toImportedProfile() }.getOrNull()
             val displayName = if (
-                (profile.name.equals("OpenFlux Yandex", ignoreCase = true) || profile.name.equals("OpenFlux", ignoreCase = true)) &&
+                (profile.name.equals("OpenFlux Yandex", ignoreCase = true) ||
+                    profile.name.equals("OpenFlux", ignoreCase = true) ||
+                    profile.name.startsWith("openflux_", ignoreCase = true)) &&
                 imported is ImportedProfile.OpenFlux
             ) {
                 when (imported.value.transport.value.lowercase()) {
                     "mailru" -> "OpenFlux Mail.ru"
                     "vyandex" -> "OpenFlux Волга"
+                    "yandex" -> "OpenFlux Яндекс"
                     "telemost" -> "OpenFlux Телемост"
                     "cups", "cupsonline" -> "OpenFlux Cups"
                     "avito" -> "OpenFlux Авито"

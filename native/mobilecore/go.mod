@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/klauspost/compress v1.18.6
-	github.com/openlibrecommunity/olcrtc v0.0.0-20260909104030-c267dd30b0bc
+	github.com/openlibrecommunity/olcrtc v0.0.0-20261023184934-6c55df536574
 	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/rtcp v1.2.16
@@ -136,4 +136,4 @@ replace github.com/zarazaex69/j => github.com/Oleglog/j v0.0.0-20260813164759-98
 // this is a replace — not a second require. The fork-only commits do not
 // exist upstream, so the openlibrecommunity pseudo-version above would not
 // resolve without it. CI's `go mod tidy` keeps go.sum for the replacement.
-replace github.com/openlibrecommunity/olcrtc => github.com/Oleglog/Olcrtc_manager v0.0.0-20260909104030-c267dd30b0bc
+replace github.com/openlibrecommunity/olcrtc => github.com/Oleglog/Olcrtc_manager v0.0.0-20261023184934-6c55df536574

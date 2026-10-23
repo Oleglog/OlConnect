@@ -9,15 +9,15 @@ type roomTransportStub struct {
 	cookies  map[string]string
 }
 
-func (s *roomTransportStub) Start() error                  { return nil }
-func (s *roomTransportStub) Stop() error                   { return nil }
-func (s *roomTransportStub) Send([]byte) error             { return nil }
-func (s *roomTransportStub) Receive(f func([]byte))         { s.receiver = f }
-func (s *roomTransportStub) IsConnected() bool              { return true }
-func (s *roomTransportStub) Stats() TransportStats          { return TransportStats{} }
-func (s *roomTransportStub) RoomList() string               { return s.room }
-func (s *roomTransportStub) OnRoomList(f func(string))       { s.onRoom = f }
-func (s *roomTransportStub) PreferredBatchBytes() int        { return 1234 }
+func (s *roomTransportStub) Start() error              { return nil }
+func (s *roomTransportStub) Stop() error               { return nil }
+func (s *roomTransportStub) Send([]byte) error         { return nil }
+func (s *roomTransportStub) Receive(f func([]byte))    { s.receiver = f }
+func (s *roomTransportStub) IsConnected() bool         { return true }
+func (s *roomTransportStub) Stats() TransportStats     { return TransportStats{} }
+func (s *roomTransportStub) RoomList() string          { return s.room }
+func (s *roomTransportStub) OnRoomList(f func(string)) { s.onRoom = f }
+func (s *roomTransportStub) PreferredBatchBytes() int  { return 1234 }
 func (s *roomTransportStub) FetchCookies() (map[string]string, error) {
 	return s.cookies, nil
 }

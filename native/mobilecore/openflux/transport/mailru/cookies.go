@@ -25,64 +25,100 @@ func loadMailruCookies(path string, jar http.CookieJar) error {
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	loaded := 0
 	for lineNo := 1; scanner.Scan(); lineNo++ {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
-		if line == "" || (strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "#HttpOnly_")) {
+		line := strings.TrimSpace(strings.TrimSuffix(scanner.Text(), "\r"))
+		if line == "" {
+			continue
+		}
+		lowerLine := strings.ToLower(line)
+		if strings.HasPrefix(lowerLine, "#httponly_") {
+			line = line[len("#httponly_"):]
+		} else if strings.HasPrefix(line, "#") {
 			continue
 		}
 
 		fields := strings.Split(line, "\t")
-		if len(fields) != 7 {
-			return fmt.Errorf("Mail.ru cookie file line %d: expected 7 tab-separated fields", lineNo)
+		if len(fields) < 7 {
+			rawLine := line
+			if strings.HasPrefix(strings.ToLower(rawLine), "cookie:") {
+				rawLine = strings.TrimSpace(rawLine[len("cookie:"):])
+			}
+			for _, part := range strings.Split(rawLine, ";") {
+				part = strings.TrimSpace(part)
+				eq := strings.IndexByte(part, '=')
+				if eq <= 0 {
+					continue
+				}
+				name, val := strings.TrimSpace(part[:eq]), strings.TrimSpace(part[eq+1:])
+				if name == "" || val == "" {
+					continue
+				}
+				setMailruCookieOnAllHosts(jar, "mail.ru", "/", name, val, true)
+				loaded++
+			}
+			continue
 		}
-		rawDomain := strings.TrimPrefix(fields[0], "#HttpOnly_")
-		domain := strings.ToLower(strings.TrimPrefix(rawDomain, "."))
+		rawDomain := fields[0]
+		if strings.HasPrefix(strings.ToLower(rawDomain), "#httponly_") {
+			rawDomain = rawDomain[len("#httponly_"):]
+		}
+		domain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(rawDomain), "."))
 		if domain != "mail.ru" && !strings.HasSuffix(domain, ".mail.ru") &&
 			domain != "datacloudmail.ru" && !strings.HasSuffix(domain, ".datacloudmail.ru") {
 			continue
 		}
-		if fields[1] != "TRUE" && fields[1] != "FALSE" {
-			return fmt.Errorf("Mail.ru cookie file line %d: invalid subdomain flag", lineNo)
-		}
-		if fields[3] != "TRUE" && fields[3] != "FALSE" {
-			return fmt.Errorf("Mail.ru cookie file line %d: invalid secure flag", lineNo)
-		}
-		expires, err := strconv.ParseInt(fields[4], 10, 64)
-		if err != nil {
-			return fmt.Errorf("Mail.ru cookie file line %d: invalid expiry", lineNo)
-		}
-		if expires != 0 && expires <= time.Now().Unix() {
+		subFlag := strings.ToUpper(strings.TrimSpace(fields[1]))
+		if subFlag != "TRUE" && subFlag != "FALSE" {
 			continue
 		}
-		if fields[5] == "" {
-			return fmt.Errorf("Mail.ru cookie file line %d: empty cookie name", lineNo)
+		secFlag := strings.ToUpper(strings.TrimSpace(fields[3]))
+		if secFlag != "TRUE" && secFlag != "FALSE" {
+			continue
 		}
-		cPath := fields[2]
+		expires, _ := strconv.ParseInt(strings.TrimSpace(fields[4]), 10, 64)
+		_ = time.Now()
+		_ = expires
+		name := strings.TrimSpace(fields[5])
+		val := strings.TrimSpace(fields[6])
+		if name == "" {
+			continue
+		}
+		cPath := strings.TrimSpace(fields[2])
 		if !strings.HasPrefix(cPath, "/") {
-			return fmt.Errorf("Mail.ru cookie file line %d: invalid cookie path", lineNo)
+			cPath = "/"
 		}
-		cookie := &http.Cookie{
-			Name:   fields[5],
-			Value:  fields[6],
-			Path:   cPath,
-			Secure: fields[3] == "TRUE",
-		}
-		if fields[1] == "TRUE" {
-			cookie.Domain = domain
-		}
-		if expires != 0 {
-			cookie.Expires = time.Unix(expires, 0)
-		}
-		jar.SetCookies(&url.URL{Scheme: "https", Host: domain, Path: cPath}, []*http.Cookie{cookie})
-		if strings.HasSuffix(domain, "mail.ru") {
-			jar.SetCookies(&url.URL{Scheme: "https", Host: "cloud.mail.ru", Path: cPath}, []*http.Cookie{cookie})
-		}
+		setMailruCookieOnAllHosts(jar, domain, cPath, name, val, secFlag == "TRUE")
 		loaded++
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read Mail.ru cookie file: %w", err)
 	}
 	if loaded == 0 {
-		return fmt.Errorf("Mail.ru cookie file has no unexpired mail.ru cookies")
+		return fmt.Errorf("Mail.ru cookie file has no mail.ru cookies")
 	}
 	return nil
+}
+
+func setMailruCookieOnAllHosts(jar http.CookieJar, domain, cPath, name, value string, secure bool) {
+	baseCookie := &http.Cookie{
+		Name:   name,
+		Value:  value,
+		Path:   "/",
+		Domain: "mail.ru",
+		Secure: secure,
+	}
+	jar.SetCookies(&url.URL{Scheme: "https", Host: "mail.ru", Path: "/"}, []*http.Cookie{baseCookie})
+	hosts := []string{"cloud.mail.ru", "doc.mail.ru", "docs.mail.ru"}
+	if domain != "" && domain != "mail.ru" {
+		hosts = append(hosts, domain)
+	}
+	for _, h := range hosts {
+		hc := &http.Cookie{
+			Name:   name,
+			Value:  value,
+			Path:   cPath,
+			Domain: h,
+			Secure: secure,
+		}
+		jar.SetCookies(&url.URL{Scheme: "https", Host: h, Path: cPath}, []*http.Cookie{hc})
+	}
 }
