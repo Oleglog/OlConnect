@@ -16,7 +16,6 @@ import (
 	"time"
 
 	transportregistry "github.com/openlibrecommunity/olcrtc/internal/transport"
-	currentvp8channel "github.com/openlibrecommunity/olcrtc/internal/transport/vp8channel"
 	olcrtc "github.com/openlibrecommunity/olcrtc/mobile"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/legacyvp8channel"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
@@ -375,9 +374,7 @@ func StartOlcrtc(
 
 func registerVP8Transport(compatibilityMode string) error {
 	switch strings.ToLower(strings.TrimSpace(compatibilityMode)) {
-	case "", "current":
-		transportregistry.Register("vp8channel", currentvp8channel.New)
-	case "legacy":
+	case "", "current", "legacy":
 		transportregistry.Register("vp8channel", legacyvp8channel.New)
 	default:
 		return fmt.Errorf("unsupported olcRTC compatibility mode: %q", compatibilityMode)

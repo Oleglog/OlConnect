@@ -661,6 +661,7 @@ func (t *MailruDocsTransport) readLoop(session *DocSession, attempt int) {
 			t.Mu.Lock()
 			stillActive := t.session == session
 			if stillActive {
+				t.session = nil
 				t.SetConnected(false)
 			}
 			t.Mu.Unlock()
@@ -831,7 +832,14 @@ func (t *MailruDocsTransport) writerLoop() {
 		msg := fmt.Sprintf(`42["message",{"type":"message","message":%q}]`, payload)
 		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
 			utils.Debugf("[M-DOCS] Write error: %v", err)
-			time.Sleep(15 * time.Millisecond)
+			t.Mu.Lock()
+			if t.session == session {
+				t.session = nil
+				t.SetConnected(false)
+				t.scheduleReconnect(0)
+			}
+			t.Mu.Unlock()
+			time.Sleep(50 * time.Millisecond)
 			continue
 		}
 		lastWrite = time.Now()
@@ -839,9 +847,8 @@ func (t *MailruDocsTransport) writerLoop() {
 
 		// Rotate make-before-break once this connection has sent its share of
 		// the server's per-connection message budget, before the server cuts it.
-		// Triggering here (rather than only on a timer) is what keeps a loaded
-		// connection — which burns the budget in seconds — from ever being cut.
-		if n := session.sentCount.Add(1); mailruRotateMsgs > 0 && n == mailruRotateMsgs {
+		// When cookies are present, session is authenticated and does not have this limit.
+		if !t.hasCookies.Load() && mailruRotateMsgs > 0 && session.sentCount.Add(1) == mailruRotateMsgs {
 			if t.rotating.CompareAndSwap(false, true) {
 				s := session
 				utils.SafeGo("mailru.rotate", func() { t.rotateCarrier(s) })

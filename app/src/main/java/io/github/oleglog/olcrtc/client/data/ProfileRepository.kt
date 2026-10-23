@@ -82,10 +82,28 @@ internal class ProfileRepository(
         } + openfluxProfiles.getAll().map {
             val transportLabel = when (it.transport.lowercase()) {
                 "mailru" -> "Mail.ru · Docs"
-                "vyandex" -> "Yandex · Volga"
-                else -> "Yandex · Docs"
+                "vyandex" -> "Яндекс · Волга"
+                "yandex" -> "Яндекс · Docs"
+                "telemost" -> "Яндекс · Телемост"
+                "cups", "cupsonline" -> "Cups.Online"
+                "avito" -> "Авито"
+                "bitrix", "bitrix24" -> "Битрикс24"
+                else -> it.transport.replaceFirstChar(Char::titlecase)
             }
-            ProfileSummary(OPENFLUX_ID_OFFSET + it.id, it.name, "OpenFlux", transportLabel)
+            val displayName = if (it.name.equals("OpenFlux Yandex", ignoreCase = true) || it.name.equals("OpenFlux", ignoreCase = true)) {
+                when (it.transport.lowercase()) {
+                    "mailru" -> "OpenFlux Mail.ru"
+                    "vyandex" -> "OpenFlux Волга"
+                    "telemost" -> "OpenFlux Телемост"
+                    "cups", "cupsonline" -> "OpenFlux Cups"
+                    "avito" -> "OpenFlux Авито"
+                    "bitrix", "bitrix24" -> "OpenFlux Битрикс24"
+                    else -> it.name
+                }
+            } else {
+                it.name
+            }
+            ProfileSummary(OPENFLUX_ID_OFFSET + it.id, displayName, "OpenFlux", transportLabel)
         } + standardProfiles.getAll().map {
             ProfileSummary(STANDARD_ID_OFFSET + it.id, it.name, it.protocol, "${it.address}:${it.port}")
         }
@@ -109,10 +127,26 @@ internal class ProfileRepository(
         val group = subscriptions.getSubscriptionGroup(subscriptionId) ?: return emptyList()
         return subscriptions.getVisibleProfiles(group.groupId).map { profile ->
             val imported = runCatching { profile.toImportedProfile() }.getOrNull()
+            val displayName = if (
+                (profile.name.equals("OpenFlux Yandex", ignoreCase = true) || profile.name.equals("OpenFlux", ignoreCase = true)) &&
+                imported is ImportedProfile.OpenFlux
+            ) {
+                when (imported.value.transport.value.lowercase()) {
+                    "mailru" -> "OpenFlux Mail.ru"
+                    "vyandex" -> "OpenFlux Волга"
+                    "telemost" -> "OpenFlux Телемост"
+                    "cups", "cupsonline" -> "OpenFlux Cups"
+                    "avito" -> "OpenFlux Авито"
+                    "bitrix", "bitrix24" -> "OpenFlux Битрикс24"
+                    else -> profile.name
+                }
+            } else {
+                profile.name
+            }
             SubscriptionProfileSummary(
                 id = profile.id,
                 subscriptionId = subscriptionId,
-                name = profile.name,
+                name = displayName,
                 type = profile.type,
                 locallyModified = profile.isLocallyModified,
                 favorite = profile.favorite,
@@ -735,8 +769,13 @@ internal class ProfileRepository(
         is ImportedProfile.Olcrtc -> "${value.provider.value} · ${value.roomId}"
         is ImportedProfile.OpenFlux -> when (value.transport.value.lowercase()) {
             "mailru" -> "Mail.ru · Docs"
-            "vyandex" -> "Yandex · Volga"
-            else -> "Yandex · Docs"
+            "vyandex" -> "Яндекс · Волга"
+            "yandex" -> "Яндекс · Docs"
+            "telemost" -> "Яндекс · Телемост"
+            "cups", "cupsonline" -> "Cups.Online"
+            "avito" -> "Авито"
+            "bitrix", "bitrix24" -> "Битрикс24"
+            else -> value.transport.value.replaceFirstChar(Char::titlecase)
         }
         is ImportedProfile.Standard -> "${value.address}:${value.port}"
         null -> "unavailable"

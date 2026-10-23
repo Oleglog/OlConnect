@@ -1566,8 +1566,12 @@ internal fun connectionTypeLabel(type: String, endpoint: String): String = when 
         val lower = endpoint.lowercase(Locale.ROOT)
         when {
             "mail" in lower -> "Mail.ru Docs"
-            "volga" in lower || "vyandex" in lower -> "Yandex Volga"
-            "yandex" in lower -> "Yandex Docs"
+            "volga" in lower || "волга" in lower || "vyandex" in lower -> "Yandex Volga"
+            "telemost" in lower || "телемост" in lower -> "Telemost"
+            "cups" in lower -> "Cups.Online"
+            "avito" in lower || "авито" in lower -> "Avito"
+            "bitrix" in lower || "битрикс" in lower -> "Bitrix24"
+            "yandex" in lower || "яндекс" in lower -> "Yandex Docs"
             else -> "OpenFlux"
         }
     }

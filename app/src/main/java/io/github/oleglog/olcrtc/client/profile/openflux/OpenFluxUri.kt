@@ -34,14 +34,33 @@ internal object OpenFluxUri {
         // Cookies are accepted on import but never serialized back: sharing
         // a URI must not leak session credentials.
         val cookiesParam = params["cookies"]
-        val fragment = uri.rawFragment?.let(::decode)?.takeIf(String::isNotBlank)
-
-        val name = fragment ?: "OpenFlux"
+        val rawFragmentName = uri.rawFragment?.let(::decode)?.takeIf(String::isNotBlank)
+        val parsedTransport = OpenFluxProfile.Transport.parse(transportParam)
+        val defaultName = when (parsedTransport) {
+            OpenFluxProfile.Transport.MAILRU -> "OpenFlux Mail.ru"
+            OpenFluxProfile.Transport.VYANDEX -> "OpenFlux Волга"
+            OpenFluxProfile.Transport.YANDEX -> "OpenFlux Яндекс"
+            OpenFluxProfile.Transport.TELEMOST -> "OpenFlux Телемост"
+            OpenFluxProfile.Transport.CUPSONLINE -> "OpenFlux Cups"
+            OpenFluxProfile.Transport.AVITO -> "OpenFlux Авито"
+            OpenFluxProfile.Transport.BITRIX24 -> "OpenFlux Битрикс24"
+            OpenFluxProfile.Transport.AUTO -> "OpenFlux"
+        }
+        val name = if (
+            rawFragmentName == null ||
+            (rawFragmentName.equals("OpenFlux Yandex", ignoreCase = true) &&
+                parsedTransport != OpenFluxProfile.Transport.YANDEX &&
+                parsedTransport != OpenFluxProfile.Transport.AUTO)
+        ) {
+            defaultName
+        } else {
+            rawFragmentName
+        }
 
         return OpenFluxProfile(
             name = name,
             documentUrl = urlParam,
-            transport = OpenFluxProfile.Transport.parse(transportParam),
+            transport = parsedTransport,
             codec = codecParam?.let(OpenFluxProfile.Codec::parse) ?: OpenFluxProfile.Codec.BATCHED,
             dnsServer = dnsParam,
             encryptionKey = keyParam,
