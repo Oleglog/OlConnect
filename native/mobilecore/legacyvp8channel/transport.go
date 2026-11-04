@@ -29,6 +29,9 @@ import (
 
 const (
 	defaultMaxPayloadSize = 60 * 1024
+	// maxAssembledFrameSize bounds one reassembled VP8 frame so a peer cannot
+	// make us grow the buffer forever by never setting the marker bit.
+	maxAssembledFrameSize = 4 * defaultMaxPayloadSize
 	defaultConnectTimeout = 60 * time.Second
 	rtpBufSize            = 65536
 	// outboundQueueSize bounds KCP packets waiting for the paced writer. Sized
@@ -853,6 +856,15 @@ func (s *vp8FrameState) processRTPPacket(pkt *rtp.Packet) []byte {
 		return nil
 	}
 
+	// The buffer only resets on a start-of-partition bit, a sequence gap or a
+	// marker bit, so a run of packets that never sets the marker grows it
+	// without limit. Wait for the next start-of-partition instead.
+	if len(s.frameBuf)+len(vp8Payload) > maxAssembledFrameSize {
+		s.frameValid = false
+		s.frameBuf = s.frameBuf[:0]
+		return nil
+	}
+
 	s.frameBuf = append(s.frameBuf, vp8Payload...)
 
 	if !pkt.Marker {
@@ -1027,6 +1039,8 @@ func (p *streamTransport) getOrCreatePeerKCP(epoch uint32) *kcpRuntime {
 	p.peerSeen[epoch] = seen
 	logger.Infof("vp8channel: peer session created epoch=0x%08x", epoch)
 
+	// Emit an immediate keepalive keyframe so the newly joined peer latches
+	// our epoch without waiting for the next idle tick.
 	out <- hdr[:]
 
 	// Pump outbound frames from this peer's queue into the writer.

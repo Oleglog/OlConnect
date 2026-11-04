@@ -74,9 +74,43 @@ type StripedTransport struct {
 
 	stopOnce sync.Once
 	done     chan struct{}
+
+	// healthDeadline: if every lane stays disconnected this long, the stripe
+	// stops itself so the node supervisor restarts the process. Zero disables.
+	healthDeadline time.Duration
+	allDeadSince   time.Time
 }
 
 const maxStripeLanes = 64
+
+// ErrAllLanesDead is returned when every lane has been dead longer than the
+// health deadline. The caller should restart the process.
+var ErrAllLanesDead = fmt.Errorf("stripe: all lanes dead")
+
+// SetHealthDeadline sets how long every lane may stay down before the stripe
+// stops itself. Zero disables the check.
+func (s *StripedTransport) SetHealthDeadline(d time.Duration) {
+	s.healthDeadline = d
+}
+
+// lanesDeadPastDeadline records a health sample and reports whether every lane
+// has been down for longer than the deadline. up is the live-lane count and
+// total the number of lanes; now is the sample time. It resets the timer as
+// soon as any lane is up.
+func (s *StripedTransport) lanesDeadPastDeadline(up, total int, now time.Time) bool {
+	if s.healthDeadline <= 0 || total == 0 {
+		return false
+	}
+	if up > 0 {
+		s.allDeadSince = time.Time{}
+		return false
+	}
+	if s.allDeadSince.IsZero() {
+		s.allDeadSince = now
+		return false
+	}
+	return now.Sub(s.allDeadSince) > s.healthDeadline
+}
 
 // FramePuller is a lane whose send clock takes frames from a source on every
 // tick (up to max of them) instead of draining a queue filled by Send.
@@ -584,6 +618,12 @@ func (s *StripedTransport) statsLoop() {
 			if l.IsConnected() {
 				up++
 			}
+		}
+		if s.lanesDeadPastDeadline(up, len(lanes), time.Now()) {
+			utils.Infof("[STRIPE] all %d lanes dead past %s, stopping: %v",
+				len(lanes), s.healthDeadline, ErrAllLanesDead)
+			_ = s.Stop()
+			return
 		}
 		d, sk, late, buffered, gaps := s.ro.snapshot()
 		loss, _ := s.uplinkLoss()

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.7.10 — 2026-11-05
+
+- Transport: the KCP length prefix and payload now go out in one write. Two writes under a mutex stopped concurrent senders interleaving but did not make the pair atomic against failure: if the prefix landed and the payload did not, the stream could not resynchronise, KCP reported nothing, and the tunnel silently stopped carrying data.
+- Transport: bound the reassembled VP8 frame (4 payloads). The buffer only resets on a start-of-partition bit, a sequence gap or the marker bit, so a peer that never sets the marker could grow it without limit.
+- Transport: emit the epoch keepalive immediately when a peer session is created, so the peer latches our epoch without waiting for the next idle tick.
+- OpenFlux: Telemost asks the SFU for a 1920x1080 sharing slot (0.45 → 1.15 MB/s per lane in the upstream measurement), gains a 60 s lane health deadline so a dead SFU session restarts instead of hanging, sends control frames ahead of the bulk queue, and uses a current Firefox UA for Avito (it answers the old Chrome/137 one with 403).
+- Core pin raised to `Oleglog/Olcrtc_manager` at `60015f0`: single-write KCP framing, ICE server normalisation for goolom, fast publisher reconnects, and the client reconnect serialisation.
+
 ## 1.5.0 — 2026-09-09
 
 - Tunnel & Web Surfing: restore tunnel MTU to 1500 to match Android VpnService MTU, completely resolving issues with stalled websites or timeouts on packets > 1400 bytes (TLS 1.3 ClientHello with post-quantum ML-KEM/Kyber keys in Chrome, large HTTP payloads).
