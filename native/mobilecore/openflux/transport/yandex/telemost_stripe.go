@@ -54,7 +54,12 @@ func NewStripedTelemostTransport(cookies, conferenceURL string, isExitNode bool,
 		maxLanes     = 6
 	)
 	group := NewTelemostGroup(cookies, conferenceURL, initialLanes, isExitNode, config)
-	return transport.NewStripedTransportAuto(group.Lanes(), group, maxLanes, true)
+	stripe := transport.NewStripedTransportAuto(group.Lanes(), group, maxLanes, true)
+	// When the SFU session dies every lane goes down and nothing reconnects by
+	// itself: the process used to keep running and silently carry no traffic.
+	// Stopping the stripe lets the node supervisor restart it.
+	stripe.SetHealthDeadline(60 * time.Second)
+	return stripe
 }
 
 // TelemostGroup is the set of lanes (participants) one node runs in a room.

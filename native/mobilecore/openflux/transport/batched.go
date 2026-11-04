@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -19,7 +20,11 @@ const (
 	defaultMaxBatchCount = 64
 	defaultLingerMs      = 5
 	batchQueueDepth      = 4096
+	ctrlQueueDepth       = 64
 )
+
+// ErrQueueFull is what TrySend returns when the control queue has no room.
+var ErrQueueFull = errors.New("batched transport: control queue full")
 
 // BatchedTransport replaces the old per-packet CompressedTransport. It queues
 // outgoing tunnel packets, coalesces bursts into a single framed+zstd batch per
@@ -34,6 +39,10 @@ type BatchedTransport struct {
 	lingerMs      int
 	maxBatchBytes int
 	maxBatchCount int
+	// ctrl carries control frames (TrySend) ahead of queued data. A full ctrl
+	// drops the frame, so a carrier that takes nothing can never hold the
+	// handshake behind a bulk queue.
+	ctrl chan []byte
 
 	running atomic.Bool
 
@@ -71,6 +80,7 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 	return &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
+		ctrl:          make(chan []byte, ctrlQueueDepth),
 		lingerMs:      envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
 		maxBatchBytes: maxBytes,
 		maxBatchCount: envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount),
@@ -102,6 +112,21 @@ func (b *BatchedTransport) Send(data []byte) error {
 		return nil
 	default:
 		return fmt.Errorf("batch queue full")
+	}
+}
+
+// TrySend queues a control frame without blocking or copying: a frame the
+// carrier cannot take right now is dropped rather than waiting behind bulk
+// data. Callers use it for hello/control frames so a dead carrier cannot stall
+// the handshake path for hours.
+func (b *BatchedTransport) TrySend(data []byte) error {
+	p := make([]byte, len(data))
+	copy(p, data)
+	select {
+	case b.ctrl <- p:
+		return nil
+	default:
+		return ErrQueueFull
 	}
 }
 
@@ -153,9 +178,14 @@ func (b *BatchedTransport) Receive(callback func([]byte)) {
 
 func (b *BatchedTransport) flushLoop() {
 	for b.running.Load() {
-		first, ok := <-b.queue
-		if !ok {
-			return
+		// Control frames jump the queue: the handshake must never stand behind
+		// a bulk queue a stalled carrier is not draining.
+		var first []byte
+		select {
+		case p := <-b.ctrl:
+			b.Transport.Send(encodeBatch([][]byte{p}))
+			continue
+		case first = <-b.queue:
 		}
 		batch := [][]byte{first}
 		size := 2 + len(first)
