@@ -76,6 +76,10 @@ class ConnectionCardStateTest {
         assertEquals("WBStream", connectionTypeLabel("olcRTC", "wbstream · room"))
         assertEquals("Telemost", connectionTypeLabel("olcrtc", "telemost · room"))
         assertEquals("VMess", connectionTypeLabel("vmess", "example.com:443"))
+        // Two Telemost profiles differ only by room, and the type label still
+        // has to name the carrier for both.
+        assertEquals("Telemost", connectionTypeLabel("olcrtc", "telemost · abc123def456"))
+        assertEquals("Telemost", connectionTypeLabel("olcrtc", "telemost · zzz999yyy888"))
     }
 
     @Test

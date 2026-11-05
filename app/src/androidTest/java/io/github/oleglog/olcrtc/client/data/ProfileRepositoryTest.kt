@@ -521,7 +521,7 @@ class ProfileRepositoryTest {
     }
 
     @Test
-    fun restoresDeletedSubscriptionProfileAfterRefresh() {
+    fun deletedSubscriptionProfileStaysDeletedAfterRefresh() {
         val profile = ImportedProfile.Standard(StandardProfile(
             name = "VLESS",
             protocol = StandardProfile.Protocol.VLESS,
@@ -537,11 +537,18 @@ class ProfileRepositoryTest {
         repository.deleteSubscriptionProfile(profileId, now = 2)
         repository.replaceSubscriptionProfiles(subscriptionId, listOf(profile), now = 3)
 
+        // The tombstone survives a refresh: a profile the user deleted must not
+        // be brought back by the next subscription sync.
+        assertTrue(dao.getProfile(profileId)!!.isDeleted)
+        assertTrue(repository.getSubscriptionProfiles(subscriptionId).isEmpty())
+        assertTrue(repository.listSubscriptionProfiles(subscriptionId).isEmpty())
+        assertNull(repository.getSubscriptionProfile(profileId))
+        assertEquals(0, repository.listSubscriptions().single().profileCount)
+
+        // Reset is the explicit way back.
+        repository.resetSubscriptionProfile(profileId, now = 4)
         assertFalse(dao.getProfile(profileId)!!.isDeleted)
-        assertEquals(listOf(profile), repository.getSubscriptionProfiles(subscriptionId))
         assertEquals(1, repository.listSubscriptionProfiles(subscriptionId).size)
-        assertEquals(ProfileConfig.Standard(profile.value), repository.getSubscriptionProfile(profileId))
-        assertEquals(1, repository.listSubscriptions().single().profileCount)
     }
 
     @Test

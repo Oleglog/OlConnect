@@ -392,7 +392,7 @@ func (t *MailruDocsTransport) PreferredBatchBytes() int { return mailruPreferred
 // download. 5/s still far exceeds the real send rate the server throttle allows
 // (~1-2 x 500 KB batches/s), so it does not cap throughput. 0 disables pacing.
 // OPENFLUX_MAILRU_MSG_INTERVAL_MS overrides it.
-const defaultMailruMsgIntervalMs = 15
+const defaultMailruMsgIntervalMs = 200
 
 var mailruMsgInterval = func() time.Duration {
 	n := defaultMailruMsgIntervalMs
@@ -406,7 +406,10 @@ var mailruMsgInterval = func() time.Duration {
 
 // defaultMailruRotateMs is the connection age at which the carrier WebSocket is
 // preemptively rotated make-before-break (see rotateCarrier/rotationLoop).
-const defaultMailruRotateMs = 120000
+// The R7 server drops an editor connection at ~45 s under load regardless of
+// auth, so rotating at 25 s leaves the (retried, if needed) rotation room to
+// finish first. OPENFLUX_MAILRU_ROTATE_MS overrides it; 0 disables the timer.
+const defaultMailruRotateMs = 25000
 
 var mailruRotateInterval = func() time.Duration {
 	n := defaultMailruRotateMs
@@ -423,8 +426,13 @@ var mailruRotateInterval = func() time.Duration {
 const mailruRotateAuthWait = 8 * time.Second
 
 // defaultMailruRotateMsgs rotates the carrier make-before-break once this many
-// chat frames have been written on it.
-const defaultMailruRotateMsgs = 500
+// chat frames have been written on it, staying under the R7 anti-abuse budget.
+// The server cuts the connection with disconnectReason 4004 ("access deny")
+// when that budget is spent: it behaves like a message token bucket of capacity
+// ~80-90 with a slow refill (measured live), so 60 keeps a margin under the
+// worst case. This applies to authenticated sessions too — the budget is
+// per-connection, not per-account. OPENFLUX_MAILRU_ROTATE_MSGS overrides it.
+const defaultMailruRotateMsgs = 60
 
 var mailruRotateMsgs = func() int64 {
 	n := int64(defaultMailruRotateMsgs)
@@ -694,7 +702,10 @@ func (t *MailruDocsTransport) rotationLoop() {
 		case <-t.Done():
 			return
 		case <-tick.C:
-			if !t.IsRunning() || !t.IsConnected() || t.hasCookies.Load() {
+			// Age-based rotation applies to authenticated sessions too: the
+			// 4004 budget and the ~45 s time kick are per-connection, so a
+			// cookie session gets cut just like an anonymous one.
+			if !t.IsRunning() || !t.IsConnected() {
 				continue
 			}
 			start := t.sessionStart.Load()
@@ -847,8 +858,11 @@ func (t *MailruDocsTransport) writerLoop() {
 
 		// Rotate make-before-break once this connection has sent its share of
 		// the server's per-connection message budget, before the server cuts it.
-		// When cookies are present, session is authenticated and does not have this limit.
-		if !t.hasCookies.Load() && mailruRotateMsgs > 0 && session.sentCount.Add(1) == mailruRotateMsgs {
+		// This applies to authenticated sessions too: the 4004 budget is
+		// per-connection, not per-account, so skipping rotation for cookie
+		// sessions (as this fork did in v1.0.19) let a loaded connection burn
+		// the budget and get cut every ~15-35 s.
+		if n := session.sentCount.Add(1); mailruRotateMsgs > 0 && n == mailruRotateMsgs {
 			if t.rotating.CompareAndSwap(false, true) {
 				s := session
 				utils.SafeGo("mailru.rotate", func() { t.rotateCarrier(s) })
@@ -1483,3 +1497,4 @@ func (t *MailruDocsTransport) LoadCookieFile(path string) error {
 	}
 	return nil
 }
+

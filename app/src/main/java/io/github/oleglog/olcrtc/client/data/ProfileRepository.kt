@@ -78,7 +78,7 @@ internal class ProfileRepository(
 
     fun listLocal(): List<ProfileSummary> =
         olcrtcProfiles.getAll().map {
-            ProfileSummary(it.id, it.name, "olcRTC", "${it.provider} · ${it.roomId}")
+            ProfileSummary(it.id, it.name, "olcRTC", "${it.provider} · ${roomTail(it.roomId)}")
         } + openfluxProfiles.getAll().map {
             val transportLabel = when (it.transport.lowercase()) {
                 "mailru" -> "Mail.ru · Docs"
@@ -484,6 +484,9 @@ internal class ProfileRepository(
                 encryptedConfigJson = upstreamConfig,
                 identityHash = reset.identityHash,
                 isLocallyModified = false,
+                // Reset is the documented way back for a deleted profile: it
+                // clears the tombstone, so a refresh lists the profile again.
+                isDeleted = false,
                 updatedAt = now,
             ),
         )
@@ -774,8 +777,10 @@ internal class ProfileRepository(
     }
 
     private fun ImportedProfile?.endpointDescription(): String = when (this) {
-        is ImportedProfile.Olcrtc -> "${value.provider.value} · ${value.roomId}"
-        is ImportedProfile.OpenFlux -> when (value.transport.value.lowercase()) {
+        // The room/token is what tells two profiles of the same carrier apart
+        // (two Telemost profiles are otherwise identical rows). It is a short
+        // tail, not the whole link, so a card stays readable.
+        is ImportedProfile.Olcrtc -> "${value.provider.value} · ${roomTail(value.roomId)}"        is ImportedProfile.OpenFlux -> when (value.transport.value.lowercase()) {
             "mailru" -> "Mail.ru · Docs"
             "vyandex" -> "Яндекс · Волга"
             "yandex" -> "Яндекс · Docs"
@@ -792,6 +797,17 @@ internal class ProfileRepository(
     private fun JSONObject.stringOrNull(name: String): String? =
         if (isNull(name)) null else getString(name)
 
+    /** Last path segment of a room link, or the value itself when it is a bare
+     *  room id. Two profiles of one carrier are distinguished by this. */
+    private fun roomTail(roomId: String): String {
+        val trimmed = roomId.trim().trimEnd('/')
+        val tail = trimmed.substringAfterLast('/').substringBefore('?').substringBefore('#')
+        return when {
+            tail.isEmpty() -> trimmed.takeLast(12)
+            tail.length > 24 -> tail.takeLast(12)
+            else -> tail
+        }
+    }
     fun insertLocal(profile: io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile): Long {
         val entity = profile.toEntity()
         return OPENFLUX_ID_OFFSET + openfluxProfiles.insert(entity)

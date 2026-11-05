@@ -246,6 +246,7 @@ class ConnectionFragment : Fragment() {
                         favorite = profile.id in localFavorites,
                         localId = profile.id,
                         config = profiles.get(profile.id),
+                        endpointLabel = profile.endpoint,
                     )
                 }
                 val subscription = profiles.listSubscriptions().flatMap { source ->
@@ -257,6 +258,7 @@ class ConnectionFragment : Fragment() {
                             favorite = profile.favorite,
                             subscriptionProfileId = profile.id,
                             config = profiles.getSubscriptionProfile(profile.id),
+                            endpointLabel = profile.endpoint,
                         )
                     }
                 }
@@ -460,6 +462,7 @@ class ConnectionFragment : Fragment() {
         }
         views.profileDetail.text = listOfNotNull(
             item.type,
+            item.endpointLabel,
             connectionStatus,
         ).joinToString(" · ")
         views.profileLatency.text = probeStatus
@@ -1462,6 +1465,9 @@ class ConnectionFragment : Fragment() {
         val localId: Long? = null,
         val subscriptionProfileId: String? = null,
         val config: ProfileConfig? = null,
+        // Room/token tail for carriers where two profiles of the same type are
+        // otherwise indistinguishable rows (two Telemost rooms, two Cups rooms).
+        val endpointLabel: String? = null,
     )
 
     companion object {

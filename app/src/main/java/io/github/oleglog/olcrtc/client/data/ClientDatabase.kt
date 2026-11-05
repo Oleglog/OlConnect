@@ -464,7 +464,11 @@ internal abstract class SubscriptionDao {
                     },
                     compatibilityMode = current.compatibilityMode,
                     isLocallyModified = current.isLocallyModified,
-                    isDeleted = false,
+                    // A deleted profile stays deleted across refreshes: the
+                    // tombstone is what stops a subscription from bringing it
+                    // back on every sync. Reviving it here (`isDeleted = false`)
+                    // is why deleted profiles reappeared.
+                    isDeleted = current.isDeleted,
                     favorite = current.favorite,
                     lastLatencyMs = current.lastLatencyMs,
                     lastCheckedAt = current.lastCheckedAt,
