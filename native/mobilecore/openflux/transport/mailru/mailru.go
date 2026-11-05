@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -35,6 +36,10 @@ import (
 const mailruUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
 
 var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
+
+// errMailruAuthRequired marks a document that needs a signed-in session. No
+// number of retries produces cookies, so the transport stops instead of looping.
+var errMailruAuthRequired = errors.New("document requires authentication (supply --cookies /path/to/cookies.txt)")
 
 // saveChangesMessageTemplate — шаблон saveChanges-сообщения в формате
 // веб-клиента Mail.ru: две подстановки %s — UserId и UserShortId в
@@ -500,6 +505,15 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			utils.Debugf("[M-DOCS] connect failed: %v", err)
 			if utils.Throttled("m-docs.fetch", time.Minute) {
 				utils.Infof("[M-DOCS] cannot open the document: %v; retrying", err)
+			}
+			if errors.Is(err, errMailruAuthRequired) {
+				// Retrying cannot fix missing or expired cookies, and the
+				// backoff runs forever (MaxReconnectAttempts is effectively
+				// unlimited). Stop and say why, instead of hammering the API
+				// once a minute with a 401 nobody reads.
+				utils.Infof("[M-DOCS] stopping: %v", err)
+				_ = t.Stop()
+				return
 			}
 			t.scheduleReconnect(attempt)
 			return
@@ -1342,7 +1356,7 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 			bodySnippet = bodySnippet[:500]
 		}
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return MailruDocsInfo{}, fmt.Errorf("API returned status %d (%s) - document requires authentication (supply --cookies /path/to/cookies.txt)", resp.StatusCode, bodySnippet)
+			return MailruDocsInfo{}, fmt.Errorf("%w (status %d: %s)", errMailruAuthRequired, resp.StatusCode, bodySnippet)
 		}
 		return MailruDocsInfo{}, fmt.Errorf("API returned status %d: %s", resp.StatusCode, bodySnippet)
 	}
