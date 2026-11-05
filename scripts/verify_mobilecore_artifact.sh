@@ -3,9 +3,16 @@ set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly AAR="${1:-$ROOT/app/libs/mobilecore.aar}"
-readonly EXPECTED_OLCRTC_VERSION="v0.0.0-20261023184934-6c55df536574"
+readonly GOMOD="$ROOT/native/mobilecore/go.mod"
+
+# Read the pins straight out of go.mod instead of repeating them here: a
+# hardcoded copy silently went stale on every core bump and failed the release
+# build for the wrong reason.
+readonly EXPECTED_OLCRTC_VERSION="$(awk '
+  $1 == "github.com/openlibrecommunity/olcrtc" { v = $2 } END { print v }' "$GOMOD")"
 readonly EXPECTED_OLCRTC_REPLACE="github.com/Oleglog/Olcrtc_manager"
-readonly EXPECTED_J_VERSION="v0.0.0-20260813164759-98b35e399132"
+readonly EXPECTED_J_VERSION="$(awk '
+  $1 == "replace" && $4 == "github.com/Oleglog/j" { v = $5 } END { print v }' "$GOMOD")"
 readonly -a REQUIRED_LIBRARIES=(
   "jni/arm64-v8a/libgojni.so"
   "jni/armeabi-v7a/libgojni.so"
