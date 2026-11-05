@@ -34,6 +34,10 @@
             android:screenOrientation="fullSensor" />
 
         <activity
+            android:name=".connection.CaptchaActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".settings.AppSelectorActivity"
             android:exported="false" />
 

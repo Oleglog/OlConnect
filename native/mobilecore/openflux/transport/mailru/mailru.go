@@ -419,13 +419,15 @@ var mailruMsgInterval = func() time.Duration {
 
 // defaultMailruRotateMs is the connection age at which the carrier WebSocket is
 // preemptively rotated make-before-break (see rotateCarrier/rotationLoop).
-// The R7 server cuts a loaded editor connection well before the documented ~45 s:
-// the field log shows 4004 at 33 s of age, while the rotation's own auth wait is
-// up to mailruRotateAuthWait. Rotating at 12 s leaves the rotation that room.
-// Shorter under load is not free either — each rotation is a new connection the
-// server also has to accept — so this is a floor, not a target.
+//
+// 25s is the value the carrier has run on since the rotation landed, and the
+// live tests in the upstream branch pass with it. A field log once showed a 4004
+// at 33s of age, and lowering this to 12s was tried as a fix — it did not stop
+// the kicks, and each extra rotation opens one more connection the server has to
+// accept, so the shorter window only added load. Keep upstream's number until a
+// log shows rotation, not the budget, as the limiting factor.
 // OPENFLUX_MAILRU_ROTATE_MS overrides it; 0 disables the timer.
-const defaultMailruRotateMs = 12000
+const defaultMailruRotateMs = 25000
 
 var mailruRotateInterval = func() time.Duration {
 	n := defaultMailruRotateMs
@@ -1045,11 +1047,12 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		}
 		utils.Infof("[M-DOCS] server disconnectReason (kick #%d, cookies=%v, sent=%d): %.200s",
 			n, t.hasCookies.Load(), sent, text)
-		// 4004 is the anti-abuse message bucket. Reconnecting at once lands on a
-		// bucket that the burst that triggered the kick left empty, and the next
-		// connection gets cut sooner (measured 36s -> 13s -> 6s). Hold off so
-		// the next connection starts with a usable budget.
-		if strings.Contains(text, "4004") {
+		// 4004 is the anti-abuse message bucket. A cooldown was tried here to let
+		// the bucket refill before reconnecting; it made no observable difference
+		// in the field and cost a dead window on every spurious kick, so the
+		// transport reconnects on the ordinary backoff like upstream does.
+		// mailruKickCooldown stays as the knob to turn it back on.
+		if mailruKickCooldown > 0 && strings.Contains(text, "4004") {
 			t.kickCooldownUntil.Store(time.Now().Add(mailruKickCooldown).UnixNano())
 			utils.Infof("[M-DOCS] 4004 anti-abuse kick; pausing %v before reconnecting", mailruKickCooldown)
 		}
@@ -1229,7 +1232,12 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 
 // mailruKickCooldown is how long the transport waits after an anti-abuse 4004
 // kick before opening a new carrier connection.
-const mailruKickCooldown = 30 * time.Second
+//
+// 0 (disabled) matches upstream, which reconnects on the ordinary backoff. The
+// cooldown was added on the theory that an immediate reconnect lands on a
+// budget the kick already drained; it made no observable difference in the
+// field, and a 30s dead window is a real cost when the kick was spurious.
+const mailruKickCooldown = 0 * time.Second
 
 // reconnectBackoff returns an exponential backoff with jitter, capped at 15s.
 func reconnectBackoff(n int) time.Duration {

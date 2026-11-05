@@ -30,6 +30,10 @@ internal object ProfileEditorDialog {
         isActive: Boolean = false,
         onSave: (ProfileConfig, AlertDialog) -> Unit,
         onError: (Throwable) -> Unit,
+        // Optional: opens the in-app captcha browser for `documentUrl` and
+        // calls `onCookies` with the header it collected. Null keeps the field
+        // clipboard-only, which is what non-Yandex carriers need anyway.
+        captchaLauncher: ((documentUrl: String, onCookies: (String) -> Unit) -> Unit)? = null,
     ) {
         val context = fragment.requireContext()
         val form = LinearLayout(context).apply {
@@ -51,7 +55,7 @@ internal object ProfileEditorDialog {
         }.also(form::addView)
         val build = when (profile) {
             is ProfileConfig.Olcrtc -> olcrtcForm(fragment, form, profile.value)
-            is ProfileConfig.OpenFlux -> openfluxForm(fragment, form, profile.value)
+            is ProfileConfig.OpenFlux -> openfluxForm(fragment, form, profile.value, captchaLauncher)
             is ProfileConfig.Standard -> standardForm(fragment, form, profile.value)
         }
         val initialDraft = runCatching(build).getOrNull() ?: profile
@@ -210,6 +214,7 @@ internal object ProfileEditorDialog {
         fragment: Fragment,
         form: LinearLayout,
         profile: io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile,
+        captchaLauncher: ((documentUrl: String, onCookies: (String) -> Unit) -> Unit)? = null,
     ): () -> ProfileConfig {
         val name = field(fragment, form, R.string.profile_field_name, profile.name)
         val url = field(fragment, form, R.string.profile_field_address, profile.documentUrl)
@@ -267,6 +272,24 @@ internal object ProfileEditorDialog {
                 setOnClickListener { cookies.setValue("") }
             })
         }.also(form::addView)
+
+        // Yandex carriers escalate the captcha to an interactive checkbox that
+        // only a real browser can pass, so the editor offers to open one. The
+        // button replaces the manual cookies.txt dance: the browser earns the
+        // cookies and hands them straight back to this field.
+        if (captchaLauncher != null && isYandexCarrier(transport.selected.value)) {
+            com.google.android.material.button.MaterialButton(fragment.requireContext()).apply {
+                setText(R.string.profile_captcha_pass)
+                setOnClickListener {
+                    val target = url.value()
+                    if (target.isBlank()) {
+                        url.requiredValue(fragment.getString(R.string.profile_value_required))
+                        return@setOnClickListener
+                    }
+                    captchaLauncher(target) { header -> cookies.setValue(header) }
+                }
+            }.also(form::addView)
+        }
 
         return {
             ProfileConfig.OpenFlux(
@@ -441,6 +464,12 @@ internal object ProfileEditorDialog {
             )
         }
     }
+
+    // "auto" is included because a Yandex link resolves to a Yandex carrier at
+    // start; offering the browser for an auto profile costs nothing and covers
+    // the common case where the user never picks the transport explicitly.
+    private fun isYandexCarrier(transport: String): Boolean =
+        transport.lowercase() in setOf("vyandex", "yandex", "volga", "auto")
 
     private fun field(
         fragment: Fragment,

@@ -67,8 +67,8 @@ func TestRotationDefaultsStayUnderTheAntiAbuseBudget(t *testing.T) {
 	if defaultMailruRotateMsgs > 60 {
 		t.Fatalf("rotate after %d messages, budget is ~80-90 per connection", defaultMailruRotateMsgs)
 	}
-	if defaultMailruRotateMs > 12000 {
-		t.Fatalf("rotate at %dms, the field log shows 4004 at 33s of connection age", defaultMailruRotateMs)
+	if defaultMailruRotateMs > 25000 {
+		t.Fatalf("rotate at %dms, upstream's live-tested value is 25000", defaultMailruRotateMs)
 	}
 }
 
@@ -87,16 +87,21 @@ func TestRotationAppliesToAuthenticatedSessions(t *testing.T) {
 	}
 }
 
-// TestReconnectAfter4004HonoursCooldown pins the pause that keeps a kick from
-// compounding: reconnecting immediately lands on a budget the burst that caused
-// the kick already drained, and the next connection is cut even sooner.
-func TestReconnectAfter4004HonoursCooldown(t *testing.T) {
+// Test4004CooldownStaysOffByDefault pins the knob: upstream reconnects on the
+// ordinary backoff, and the cooldown that was tried here made no observable
+// difference while costing a 30 s dead window on every kick. It must stay
+// reachable (behind the constant) but disabled.
+func Test4004CooldownStaysOffByDefault(t *testing.T) {
 	src := string(readTransportSource(t, "mailru.go"))
-	if !strings.Contains(src, "kickCooldownUntil.Store(") {
-		t.Fatal("a 4004 kick no longer arms the reconnect cooldown")
+	if !strings.Contains(src, "mailruKickCooldown > 0 && strings.Contains(text, \"4004\")") {
+		t.Fatal("the 4004 cooldown must stay behind its knob so it can be re-enabled")
 	}
 	if !strings.Contains(src, "wait > d") {
 		t.Fatal("scheduleReconnect ignores the 4004 cooldown")
+	}
+	if mailruKickCooldown != 0 {
+		t.Fatalf("kick cooldown = %v; upstream reconnects on the ordinary backoff and the "+
+			"cooldown made no observable difference", mailruKickCooldown)
 	}
 }
 

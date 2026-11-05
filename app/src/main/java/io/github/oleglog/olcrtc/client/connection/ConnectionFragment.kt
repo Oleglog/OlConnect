@@ -119,6 +119,22 @@ class ConnectionFragment : Fragment() {
         }
     }
 
+    // Set while the captcha browser is open: the editor callback that should
+    // receive the cookies. The dialog itself is not re-created on return, so
+    // the field it belongs to is remembered here.
+    private var captchaTarget: ((String) -> Unit)? = null
+
+    private val captchaBrowser = registerForActivityResult(CaptchaContract()) { result ->
+        val target = captchaTarget
+        captchaTarget = null
+        val cookies = result.cookies
+        when {
+            cookies.isNullOrBlank() -> Unit
+            target != null -> target(cookies)
+            else -> Unit
+        }
+    }
+
     private val qrScanner = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -1254,6 +1270,17 @@ class ConnectionFragment : Fragment() {
             .show()
     }
 
+    /**
+     * Opens the in-app browser on [documentUrl] so the user can pass the
+     * interactive Yandex captcha; [onCookies] receives the resulting cookie
+     * header. Registration happens in [captchaBrowser]; this only parks the
+     * callback, because the editor dialog itself does not survive the trip.
+     */
+    private fun launchCaptchaBrowser(documentUrl: String, onCookies: (String) -> Unit) {
+        captchaTarget = onCookies
+        captchaBrowser.launch(documentUrl)
+    }
+
     private fun editLocalProfile(profileId: Long) {
         if (storage.isShutdown) return
         storage.execute {
@@ -1267,6 +1294,7 @@ class ConnectionFragment : Fragment() {
                         isActive = (activity as? MainActivity)?.activeProfileReference() == "local:$profileId",
                         onSave = { updated, dialog -> saveLocalProfile(profileId, updated, dialog) },
                         onError = { showStatus(it.message ?: getString(R.string.invalid_profile)) },
+                        captchaLauncher = ::launchCaptchaBrowser,
                     )
                 }.onFailure { showStatus(it.message ?: getString(R.string.invalid_profile)) }
             }
@@ -1306,6 +1334,7 @@ class ConnectionFragment : Fragment() {
                         isActive = (activity as? MainActivity)?.activeProfileReference() == "subscription:$profileId",
                         onSave = { updated, dialog -> saveSubscriptionProfile(profileId, updated, dialog) },
                         onError = { showStatus(it.message ?: getString(R.string.invalid_profile)) },
+                        captchaLauncher = ::launchCaptchaBrowser,
                     )
                 }.onFailure { showStatus(it.message ?: getString(R.string.invalid_profile)) }
             }

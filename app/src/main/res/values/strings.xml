@@ -30,6 +30,7 @@
     <string name="profile_field_cookies">Session cookies (Mail.ru / Yandex)</string>
     <string name="profile_cookies_paste">Paste cookies</string>
     <string name="profile_cookies_clear">Clear</string>
+    <string name="profile_captcha_pass">Pass the captcha in a browser</string>
     <string name="profile_field_vp8_fps">VP8 frames per second</string>
     <string name="profile_field_vp8_batch">VP8 batch size</string>
     <string name="profile_speed_preset_balanced">Balanced (60 fps · batch 32)</string>
