@@ -1,6 +1,7 @@
 package io.github.oleglog.olcrtc.client.connection
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -136,7 +137,7 @@ internal class CaptchaContract : ActivityResultContract<String, CaptchaResult>()
 
     override fun parseResult(resultCode: Int, intent: Intent?): CaptchaResult =
         CaptchaResult(
-            if (resultCode == ComponentActivity.RESULT_OK) {
+            if (resultCode == Activity.RESULT_OK) {
                 intent?.getStringExtra(CaptchaActivity.EXTRA_COOKIES)
             } else {
                 null
