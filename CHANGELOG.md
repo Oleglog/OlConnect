@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.7.13 — 2026-11-05
+
+- Diagnostics are mirrored to logcat under the `olcrtc` tag (redacted text only), so a release build can be inspected over `adb logcat` without exporting the private log file from the UI first. The 15 s theory was disproved on device: raising the readiness budget only moved the reconnect later, so the next step needs the client-side core log.
+- Telemost keeps the 90 s readiness budget from 1.7.12.
+
 ## 1.7.12 — 2026-11-05
 
 - Fixed the 15-second reconnect loop on Telemost over vp8channel. Bring-up needs ICE, two peer connections, KCP and only then the smux control stream, so the 15 s default expired mid-bring-up: the client tore the tunnel down, retried, and left another participant behind in the conference every time. Logcat showed exactly four cycles, each 15.0 s apart (`reason=agentDisconnect`). Telemost now gets a 90 s readiness budget; wbstream and jitsi keep 45 s.
