@@ -216,8 +216,17 @@ func parseCaptchaHTML(html, pageURL string) (*captchaSSRData, string, error) {
 	} else if m := reSSRDataJSON.FindStringSubmatch(html); len(m) >= 2 {
 		jsonStr := m[1]
 		if err := json.Unmarshal([]byte(jsonStr), &ssr); err != nil {
-			return nil, "", fmt.Errorf("captcha: SSR_DATA json unmarshal: %w", err)
+			// The escalated /showcaptcha?cc=1 page ships __SSR_DATA__ as a JS
+			// object literal (unquoted keys), not JSON. That page is the
+			// interactive SmartCaptcha checkbox: it needs rdata/tdata/picasso
+			// from the browser's PGreed attestation, and a solved PoW alone
+			// still comes back as form-fb-hint=7.73. Report it as a captcha
+			// requirement so the caller stops retrying and asks for fresh
+			// cookies instead of burning the exit IP on every attempt.
+			return nil, "", fmt.Errorf("%w: smartcaptcha checkbox", ErrCaptchaRequired)
 		}
+	} else if bytes.Contains([]byte(html), []byte("checkbox-captcha-form")) {
+		return nil, "", fmt.Errorf("%w: smartcaptcha checkbox", ErrCaptchaRequired)
 	} else {
 		return nil, "", fmt.Errorf("captcha: __SSR_DATA__ not found")
 	}

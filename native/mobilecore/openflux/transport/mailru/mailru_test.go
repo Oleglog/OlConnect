@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -66,8 +67,8 @@ func TestRotationDefaultsStayUnderTheAntiAbuseBudget(t *testing.T) {
 	if defaultMailruRotateMsgs > 60 {
 		t.Fatalf("rotate after %d messages, budget is ~80-90 per connection", defaultMailruRotateMsgs)
 	}
-	if defaultMailruRotateMs > 25000 {
-		t.Fatalf("rotate at %dms, the server drops a loaded connection at ~45s", defaultMailruRotateMs)
+	if defaultMailruRotateMs > 12000 {
+		t.Fatalf("rotate at %dms, the field log shows 4004 at 33s of connection age", defaultMailruRotateMs)
 	}
 }
 
@@ -83,6 +84,19 @@ func TestRotationAppliesToAuthenticatedSessions(t *testing.T) {
 		if bytes.Contains(src, []byte(forbidden)) {
 			t.Fatalf("rotation is skipped for cookie sessions again: %q", forbidden)
 		}
+	}
+}
+
+// TestReconnectAfter4004HonoursCooldown pins the pause that keeps a kick from
+// compounding: reconnecting immediately lands on a budget the burst that caused
+// the kick already drained, and the next connection is cut even sooner.
+func TestReconnectAfter4004HonoursCooldown(t *testing.T) {
+	src := string(readTransportSource(t, "mailru.go"))
+	if !strings.Contains(src, "kickCooldownUntil.Store(") {
+		t.Fatal("a 4004 kick no longer arms the reconnect cooldown")
+	}
+	if !strings.Contains(src, "wait > d") {
+		t.Fatal("scheduleReconnect ignores the 4004 cooldown")
 	}
 }
 

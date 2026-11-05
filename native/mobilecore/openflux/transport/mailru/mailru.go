@@ -282,6 +282,14 @@ type MailruDocsTransport struct {
 	authedConn  atomic.Int64
 	hasCookies  atomic.Bool
 	kickBudgets atomic.Int64 // kicks observed (for the Infof summary line)
+
+	// kickCooldownUntil (UnixNano) delays the reconnect that follows an
+	// anti-abuse 4004 kick. Reconnecting immediately after a kick is what
+	// shrinks the budget on the next connection: the log shows the same
+	// document dropping at 36s, then 13s, then 6s of age over consecutive
+	// attempts, because each fresh socket starts with the bucket already
+	// drained by the previous burst. A pause lets the bucket refill.
+	kickCooldownUntil atomic.Int64
 }
 
 // mailruRecvQueue bounds the decoupling receive buffer (whole batches, so kept
@@ -411,10 +419,13 @@ var mailruMsgInterval = func() time.Duration {
 
 // defaultMailruRotateMs is the connection age at which the carrier WebSocket is
 // preemptively rotated make-before-break (see rotateCarrier/rotationLoop).
-// The R7 server drops an editor connection at ~45 s under load regardless of
-// auth, so rotating at 25 s leaves the (retried, if needed) rotation room to
-// finish first. OPENFLUX_MAILRU_ROTATE_MS overrides it; 0 disables the timer.
-const defaultMailruRotateMs = 25000
+// The R7 server cuts a loaded editor connection well before the documented ~45 s:
+// the field log shows 4004 at 33 s of age, while the rotation's own auth wait is
+// up to mailruRotateAuthWait. Rotating at 12 s leaves the rotation that room.
+// Shorter under load is not free either — each rotation is a new connection the
+// server also has to accept — so this is a floor, not a target.
+// OPENFLUX_MAILRU_ROTATE_MS overrides it; 0 disables the timer.
+const defaultMailruRotateMs = 12000
 
 var mailruRotateInterval = func() time.Duration {
 	n := defaultMailruRotateMs
@@ -1034,6 +1045,14 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		}
 		utils.Infof("[M-DOCS] server disconnectReason (kick #%d, cookies=%v, sent=%d): %.200s",
 			n, t.hasCookies.Load(), sent, text)
+		// 4004 is the anti-abuse message bucket. Reconnecting at once lands on a
+		// bucket that the burst that triggered the kick left empty, and the next
+		// connection gets cut sooner (measured 36s -> 13s -> 6s). Hold off so
+		// the next connection starts with a usable budget.
+		if strings.Contains(text, "4004") {
+			t.kickCooldownUntil.Store(time.Now().Add(mailruKickCooldown).UnixNano())
+			utils.Infof("[M-DOCS] 4004 anti-abuse kick; pausing %v before reconnecting", mailruKickCooldown)
+		}
 		return
 	}
 
@@ -1190,6 +1209,13 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 		return // one is already waiting
 	}
 	d := reconnectBackoff(next)
+	// A 4004 kick drains the per-connection budget; the backoff alone (0.5-15 s)
+	// is shorter than the refill, so honour the cooldown on top of it.
+	if until := t.kickCooldownUntil.Load(); until != 0 {
+		if wait := time.Until(time.Unix(0, until)); wait > d {
+			d = wait
+		}
+	}
 	utils.Debugf("[M-DOCS] reconnecting in %v (attempt %d)", d, next)
 	time.Sleep(d)
 	t.reconnecting.Store(false) // a failed connect schedules the next one itself
@@ -1200,6 +1226,10 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 	t.RecordReconnect()
 	t.connectToDoc(next)
 }
+
+// mailruKickCooldown is how long the transport waits after an anti-abuse 4004
+// kick before opening a new carrier connection.
+const mailruKickCooldown = 30 * time.Second
 
 // reconnectBackoff returns an exponential backoff with jitter, capped at 15s.
 func reconnectBackoff(n int) time.Duration {

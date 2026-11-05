@@ -848,6 +848,7 @@ class OlcrtcVpnService : VpnService() {
         return when {
             message.startsWith("profile ") || error is IllegalArgumentException ->
                 getString(R.string.vpn_error_invalid_profile)
+            "captcha" in message -> getString(R.string.vpn_error_captcha)
             "auth" in message || "authentication" in message ->
                 getString(R.string.vpn_error_authentication)
             "timeout" in message || "timed out" in message ->
@@ -1178,19 +1179,31 @@ class OlcrtcVpnService : VpnService() {
     }
 
     private fun verifyDatapath(socksPort: Int, dns: DnsEndpoint) {
-        try {
-            queryDnsNameThroughTunnel(
-                socksPort,
-                dns,
-                TunnelHealthPolicy.DATAPATH_DNS_NAMES.first(),
-                TunnelHealthPolicy.DATAPATH_TIMEOUT_MILLIS,
-            )
-        } catch (error: SocketTimeoutException) {
-            throw IllegalStateException(
-                "VPN datapath timed out",
-                error,
-            )
+        var lastError: SocketTimeoutException? = null
+        repeat(TunnelHealthPolicy.DATAPATH_ATTEMPTS) { attempt ->
+            try {
+                queryDnsNameThroughTunnel(
+                    socksPort,
+                    dns,
+                    TunnelHealthPolicy.DATAPATH_DNS_NAMES.first(),
+                    TunnelHealthPolicy.DATAPATH_TIMEOUT_MILLIS,
+                )
+                return
+            } catch (error: SocketTimeoutException) {
+                // Only a timeout is worth retrying: it means one datagram went
+                // missing, not that the tunnel is unusable. Cancellation and
+                // protocol errors propagate unchanged.
+                lastError = error
+                if (attempt < TunnelHealthPolicy.DATAPATH_ATTEMPTS - 1) {
+                    diagnostics.append(
+                        "info",
+                        "VPN datapath probe ${attempt + 1}/${TunnelHealthPolicy.DATAPATH_ATTEMPTS} timed out",
+                    )
+                    Thread.sleep(TunnelHealthPolicy.DATAPATH_RETRY_PAUSE_MILLIS)
+                }
+            }
         }
+        throw IllegalStateException("VPN datapath timed out", lastError)
     }
 
     private fun queryDnsNameThroughTunnel(

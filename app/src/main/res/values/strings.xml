@@ -420,6 +420,7 @@
     <string name="vpn_stage_verify_datapath">Checking internet access</string>
     <string name="vpn_error_invalid_profile">The connection is missing or contains invalid parameters</string>
     <string name="vpn_error_authentication">Connection authentication failed</string>
+    <string name="vpn_error_captcha">Yandex requires a captcha for this document. Open it in a browser from this network, pass the captcha, then export fresh cookies into the profile</string>
     <string name="vpn_error_timeout">The service did not respond in time</string>
     <string name="vpn_error_network">The physical network is unavailable</string>
     <string name="vpn_error_generic">Unable to establish the VPN connection</string>

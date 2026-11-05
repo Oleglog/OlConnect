@@ -246,7 +246,7 @@ class ConnectionFragment : Fragment() {
                         favorite = profile.id in localFavorites,
                         localId = profile.id,
                         config = profiles.get(profile.id),
-                        endpointLabel = profile.endpoint,
+                        endpointLabel = profile.tail,
                     )
                 }
                 val subscription = profiles.listSubscriptions().flatMap { source ->
@@ -258,7 +258,7 @@ class ConnectionFragment : Fragment() {
                             favorite = profile.favorite,
                             subscriptionProfileId = profile.id,
                             config = profiles.getSubscriptionProfile(profile.id),
-                            endpointLabel = profile.endpoint,
+                            endpointLabel = profile.tail,
                         )
                     }
                 }
@@ -460,6 +460,10 @@ class ConnectionFragment : Fragment() {
             latencyMs == null -> getString(R.string.profile_test_unavailable)
             else -> getString(R.string.connection_latency_value, latencyMs)
         }
+        // Type label names the carrier ("Telemost", "Mail.ru Docs"); the tail
+        // names which room/document it is. Printing `endpoint` here would
+        // repeat the carrier a second time, and the name above often says it a
+        // third time — that is the tautology this line used to have.
         views.profileDetail.text = listOfNotNull(
             item.type,
             item.endpointLabel,
@@ -1465,8 +1469,9 @@ class ConnectionFragment : Fragment() {
         val localId: Long? = null,
         val subscriptionProfileId: String? = null,
         val config: ProfileConfig? = null,
-        // Room/token tail for carriers where two profiles of the same type are
-        // otherwise indistinguishable rows (two Telemost rooms, two Cups rooms).
+        // Room/document tail only — the carrier is already named by `type`
+        // (and usually again by the user-visible name), so showing `endpoint`
+        // here printed the same carrier twice on one card.
         val endpointLabel: String? = null,
     )
 

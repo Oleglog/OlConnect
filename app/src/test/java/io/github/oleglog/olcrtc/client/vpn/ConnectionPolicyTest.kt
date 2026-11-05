@@ -15,6 +15,13 @@ class ConnectionPolicyTest {
     }
 
     @Test
+    fun datapathProbesAreRetriedBeforeGivingUp() {
+        // A single dropped DNS datagram during a fresh carrier lane's bitrate
+        // ramp must not tear the just-built tunnel down.
+        assertTrue(TunnelHealthPolicy.DATAPATH_ATTEMPTS >= 2)
+    }
+
+    @Test
     fun preparesGeoAssetsOnlyForRussiaDirectPreset() {
         assertFalse(requiresGeoAssets(RoutingPolicy(RoutingPolicy.Preset.ALL_VPN)))
         assertTrue(requiresGeoAssets(RoutingPolicy(RoutingPolicy.Preset.RUSSIA_DIRECT)))

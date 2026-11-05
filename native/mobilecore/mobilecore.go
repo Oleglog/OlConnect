@@ -472,7 +472,11 @@ func IsFatalError(message string) bool {
 		strings.HasPrefix(message, "create Xray instance:") ||
 		strings.Contains(message, "carrier auth failed") ||
 		strings.Contains(message, "SOCKS5 authentication failed") ||
-		strings.Contains(message, "message authentication failed")
+		strings.Contains(message, "message authentication failed") ||
+		// A SmartCaptcha checkbox challenge cannot be solved from the core:
+		// it needs the browser's PGreed attestation. Retrying only burns the
+		// exit IP harder, so stop and let the user refresh the cookies.
+		strings.Contains(message, "captcha required")
 }
 
 func StopAll() error {

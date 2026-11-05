@@ -416,6 +416,7 @@
     <string name="vpn_stage_verify_datapath">Проверка доступа в интернет</string>
     <string name="vpn_error_invalid_profile">Подключение удалено или содержит некорректные параметры</string>
     <string name="vpn_error_authentication">Не удалось пройти авторизацию подключения</string>
+    <string name="vpn_error_captcha">Яндекс требует капчу для этого документа. Откройте его в браузере из этой сети, пройдите капчу и загрузите свежие куки в профиль</string>
     <string name="vpn_error_timeout">Сервис не ответил вовремя</string>
     <string name="vpn_error_network">Физическая сеть недоступна</string>
     <string name="vpn_error_generic">Не удалось установить VPN-соединение</string>

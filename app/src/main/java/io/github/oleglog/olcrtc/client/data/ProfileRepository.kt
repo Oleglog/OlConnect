@@ -21,6 +21,10 @@ internal data class ProfileSummary(
     val name: String,
     val type: String,
     val endpoint: String,
+    // Short distinguishing fragment (room id or document id). The card shows
+    // this, not `endpoint`: `endpoint` repeats the carrier name that the type
+    // label already states.
+    val tail: String? = null,
 )
 
 internal data class SubscriptionSource(
@@ -55,6 +59,7 @@ internal data class SubscriptionProfileSummary(
     val favorite: Boolean,
     val lastLatencyMs: Long?,
     val endpoint: String,
+    val tail: String? = null,
 )
 
 internal class ProfileRepository(
@@ -78,7 +83,13 @@ internal class ProfileRepository(
 
     fun listLocal(): List<ProfileSummary> =
         olcrtcProfiles.getAll().map {
-            ProfileSummary(it.id, it.name, "olcRTC", "${it.provider} · ${roomTail(it.roomId)}")
+            ProfileSummary(
+                id = it.id,
+                name = it.name,
+                type = "olcRTC",
+                endpoint = "${it.provider} · ${roomTail(it.roomId)}",
+                tail = roomTail(it.roomId),
+            )
         } + openfluxProfiles.getAll().map {
             val transportLabel = when (it.transport.lowercase()) {
                 "mailru" -> "Mail.ru · Docs"
@@ -108,9 +119,21 @@ internal class ProfileRepository(
             } else {
                 it.name
             }
-            ProfileSummary(OPENFLUX_ID_OFFSET + it.id, displayName, "OpenFlux", transportLabel)
+            ProfileSummary(
+                id = OPENFLUX_ID_OFFSET + it.id,
+                name = displayName,
+                type = "OpenFlux",
+                endpoint = transportLabel,
+                tail = runCatching { roomTail(secrets.decrypt(it.documentUrl)) }.getOrNull(),
+            )
         } + standardProfiles.getAll().map {
-            ProfileSummary(STANDARD_ID_OFFSET + it.id, it.name, it.protocol, "${it.address}:${it.port}")
+            ProfileSummary(
+                id = STANDARD_ID_OFFSET + it.id,
+                name = it.name,
+                type = it.protocol,
+                endpoint = "${it.address}:${it.port}",
+                tail = "${it.address}:${it.port}",
+            )
         }
 
     fun listSubscriptions(): List<SubscriptionSummary> = subscriptions.getSubscriptions().map { subscription ->
@@ -160,6 +183,7 @@ internal class ProfileRepository(
                 favorite = profile.favorite,
                 lastLatencyMs = profile.lastLatencyMs,
                 endpoint = imported.endpointDescription(),
+                tail = imported.tailDescription(),
             )
         }
     }
@@ -781,18 +805,19 @@ internal class ProfileRepository(
         // (two Telemost profiles are otherwise identical rows). It is a short
         // tail, not the whole link, so a card stays readable.
         is ImportedProfile.Olcrtc -> "${value.provider.value} · ${roomTail(value.roomId)}"
-        is ImportedProfile.OpenFlux -> when (value.transport.value.lowercase()) {
-            "mailru" -> "Mail.ru · Docs"
-            "vyandex" -> "Яндекс · Волга"
-            "yandex" -> "Яндекс · Docs"
-            "telemost" -> "Яндекс · Телемост"
-            "cups", "cupsonline" -> "Cups.Online"
-            "avito" -> "Авито"
-            "bitrix", "bitrix24" -> "Битрикс24"
-            else -> value.transport.value.replaceFirstChar(Char::titlecase)
-        }
+        is ImportedProfile.OpenFlux -> value.transport.value.replaceFirstChar(Char::titlecase)
         is ImportedProfile.Standard -> "${value.address}:${value.port}"
         null -> "unavailable"
+    }
+
+    // tail is the half of the card's detail line that the type label cannot
+    // already say: the room or document id. Everything else in
+    // endpointDescription repeats the carrier name.
+    private fun ImportedProfile?.tailDescription(): String? = when (this) {
+        is ImportedProfile.Olcrtc -> roomTail(value.roomId)
+        is ImportedProfile.OpenFlux -> roomTail(value.documentUrl)
+        is ImportedProfile.Standard -> "${value.address}:${value.port}"
+        null -> null
     }
 
     private fun JSONObject.stringOrNull(name: String): String? =
@@ -809,6 +834,7 @@ internal class ProfileRepository(
             else -> tail
         }
     }
+
     fun insertLocal(profile: io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile): Long {
         val entity = profile.toEntity()
         return OPENFLUX_ID_OFFSET + openfluxProfiles.insert(entity)
