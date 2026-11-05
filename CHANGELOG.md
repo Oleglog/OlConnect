@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.7.11 — 2026-11-05
+
+- CI: the release build now reads the mobilecore pins from `native/mobilecore/go.mod` instead of a hardcoded copy, which failed the artifact check on every core bump.
+- Same transport and core changes as 1.7.10, first published here.
+
 ## 1.7.10 — 2026-11-05
 
 - Transport: the KCP length prefix and payload now go out in one write. Two writes under a mutex stopped concurrent senders interleaving but did not make the pair atomic against failure: if the prefix landed and the payload did not, the stream could not resynchronise, KCP reported nothing, and the tunnel silently stopped carrying data.
