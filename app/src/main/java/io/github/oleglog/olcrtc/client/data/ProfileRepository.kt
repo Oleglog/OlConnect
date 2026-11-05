@@ -780,7 +780,8 @@ internal class ProfileRepository(
         // The room/token is what tells two profiles of the same carrier apart
         // (two Telemost profiles are otherwise identical rows). It is a short
         // tail, not the whole link, so a card stays readable.
-        is ImportedProfile.Olcrtc -> "${value.provider.value} · ${roomTail(value.roomId)}"        is ImportedProfile.OpenFlux -> when (value.transport.value.lowercase()) {
+        is ImportedProfile.Olcrtc -> "${value.provider.value} · ${roomTail(value.roomId)}"
+        is ImportedProfile.OpenFlux -> when (value.transport.value.lowercase()) {
             "mailru" -> "Mail.ru · Docs"
             "vyandex" -> "Яндекс · Волга"
             "yandex" -> "Яндекс · Docs"
