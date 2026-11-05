@@ -52,6 +52,29 @@ class NativeOlcrtcConfigTest {
     }
 
     @Test
+    fun telemostUsesExtendedReadyTimeout() {
+        val profile = OlcrtcProfile(
+            name = "Telemost",
+            provider = OlcrtcProfile.Provider.TELEMOST,
+            transport = OlcrtcProfile.Transport.VP8CHANNEL,
+            roomId = "https://telemost.yandex.ru/j/123",
+            clientId = "client",
+            keyHex = "a".repeat(64),
+        )
+
+        val config = NativeOlcrtcConfig.from(
+            profile,
+            socksPort = 1081,
+            dns = DnsEndpoint.parse("77.88.8.8:53"),
+        )
+
+        // The 15 s default tore the tunnel down mid-bring-up on device and
+        // produced a 15 s reconnect loop.
+        assertEquals(NativeOlcrtcConfig.TELEMOST_READY_TIMEOUT_MILLIS, config.readyTimeoutMillis)
+        assertNotEquals(NativeOlcrtcConfig.DEFAULT_READY_TIMEOUT_MILLIS, config.readyTimeoutMillis)
+    }
+
+    @Test
     fun udpRelayDefaultsOffAndPropagatesWhenEnabled() {
         val profile = OlcrtcProfile(
             name = "WB",

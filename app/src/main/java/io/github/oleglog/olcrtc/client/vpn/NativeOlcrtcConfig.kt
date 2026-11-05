@@ -64,12 +64,19 @@ internal data class NativeOlcrtcConfig(
                 // signaling-only carrier; allow it the same budget as wbstream
                 // instead of the 15s default which fires false-ready timeouts.
                 OlcrtcProfile.Provider.JITSI -> JITSI_READY_TIMEOUT_MILLIS
-                OlcrtcProfile.Provider.TELEMOST -> DEFAULT_READY_TIMEOUT_MILLIS
+                // Telemost over vp8channel needs ICE, two peer connections, KCP
+                // and only then the smux control stream. The 15 s default fired
+                // mid-bring-up on a real device: the client tore the tunnel
+                // down and retried, and every retry left another participant
+                // behind in the conference (observed as a 15 s reconnect loop
+                // in logcat).
+                OlcrtcProfile.Provider.TELEMOST -> TELEMOST_READY_TIMEOUT_MILLIS
             },
         )
 
         const val DEFAULT_READY_TIMEOUT_MILLIS = 15_000
         const val WBSTREAM_READY_TIMEOUT_MILLIS = 45_000
         const val JITSI_READY_TIMEOUT_MILLIS = 45_000
+        const val TELEMOST_READY_TIMEOUT_MILLIS = 90_000
     }
 }

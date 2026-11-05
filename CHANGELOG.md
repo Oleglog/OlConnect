@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.7.12 — 2026-11-05
+
+- Fixed the 15-second reconnect loop on Telemost over vp8channel. Bring-up needs ICE, two peer connections, KCP and only then the smux control stream, so the 15 s default expired mid-bring-up: the client tore the tunnel down, retried, and left another participant behind in the conference every time. Logcat showed exactly four cycles, each 15.0 s apart (`reason=agentDisconnect`). Telemost now gets a 90 s readiness budget; wbstream and jitsi keep 45 s.
+
 ## 1.7.11 — 2026-11-05
 
 - CI: the release build now reads the mobilecore pins from `native/mobilecore/go.mod` instead of a hardcoded copy, which failed the artifact check on every core bump.
