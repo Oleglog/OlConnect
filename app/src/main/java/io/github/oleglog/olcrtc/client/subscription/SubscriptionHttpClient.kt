@@ -1,5 +1,6 @@
 package io.github.oleglog.olcrtc.client.subscription
 
+import io.github.oleglog.olcrtc.client.BuildConfig
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.Proxy
@@ -54,6 +55,10 @@ internal class SubscriptionHttpClient(
                 connectTimeout = TIMEOUT_MS
                 readTimeout = TIMEOUT_MS
                 setRequestProperty("Accept", "text/plain, application/octet-stream, application/json")
+                // Subscription panels (Remnawave and friends) route by User-Agent:
+                // the same URL may serve JSON for one client and a URI list for
+                // another. Announce ourselves instead of the JVM default.
+                setRequestProperty("User-Agent", "olcRTC-Client/${BuildConfig.VERSION_NAME} (Android)")
                 setRequestProperty("Cache-Control", "no-cache, no-store")
                 setRequestProperty("Pragma", "no-cache")
                 etag?.let { setRequestProperty("If-None-Match", it) }
