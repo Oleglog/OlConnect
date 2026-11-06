@@ -1039,10 +1039,8 @@ class OlcrtcVpnService : VpnService() {
             packetFilterCache.clear()
             val session = OpenFluxSession(
                 profile = profile.value,
-                dnsServer = dnsIp,
                 establishTun = { establishOpenFluxTun(dnsIp) },
                 isPacketAllowed = { packet -> isPacketAllowedForPerApp(packet) },
-                socketProtector = { socket -> protect(socket) },
                 onFail = { error ->
                     diagnostics.append("error", "OpenFlux error: $error")
                     commands.execute {

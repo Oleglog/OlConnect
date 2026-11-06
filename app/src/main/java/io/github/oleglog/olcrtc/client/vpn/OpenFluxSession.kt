@@ -18,10 +18,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal class OpenFluxSession(
     private val profile: OpenFluxProfile,
-    private val dnsServer: String,
     private val establishTun: () -> ParcelFileDescriptor,
     private val isPacketAllowed: ((packet: ByteArray) -> Boolean)? = null,
-    private val socketProtector: ((java.net.DatagramSocket) -> Unit)? = null,
     private val onFail: (String) -> Unit = {},
     private val onLog: (String) -> Unit = {},
 ) : VpnTunnelSession {
@@ -111,12 +109,12 @@ internal class OpenFluxSession(
         tunnelInput = input
         tunnelOutput = output
 
-        executeWorker { readOutgoingPackets(input, dnsServer) }
+        executeWorker { readOutgoingPackets(input) }
         executeWorker { writeIncomingPackets(output) }
         executeWorker { runStatsLoop() }
     }
 
-    private fun readOutgoingPackets(input: FileInputStream, dns: String) {
+    private fun readOutgoingPackets(input: FileInputStream) {
         val buffer = ByteArray(32767)
         try {
             while (!closed.get()) {
@@ -147,14 +145,7 @@ internal class OpenFluxSession(
                     continue
                 }
 
-                if (isIpv4UdpDns(packet)) {
-                    executeWorker {
-                        val out = synchronized(outputLock) { tunnelOutput }
-                        if (out != null && !closed.get()) {
-                            forwardDns(out, packet, dns)
-                        }
-                    }
-                } else if (isIpv4Tcp(packet) || isIpv4Udp(packet)) {
+                if (isIpv4Tcp(packet) || isIpv4Udp(packet)) {
                     val sendErr = Mobilecore.sendOpenFlux(packet)
                     if (sendErr.isNullOrEmpty()) {
                         pktsUp.incrementAndGet()
@@ -207,48 +198,6 @@ internal class OpenFluxSession(
         }
     }
 
-    private fun forwardDns(output: FileOutputStream, request: ByteArray, dns: String) {
-        val ipHeader = (request[0].toInt() and 0x0f) * 4
-        if (request.size < ipHeader + 8) return
-        val dnsOffset = ipHeader + 8
-        val udpLength = unsignedShort(request, ipHeader + 4)
-        if (dnsOffset > request.size || udpLength < 8 || ipHeader + udpLength > request.size) return
-
-        val query = Arrays.copyOfRange(request, dnsOffset, ipHeader + udpLength)
-        val answer = queryDnsUdp(query, dns)
-        if (answer != null && answer.isNotEmpty()) {
-            val response = buildDnsResponse(request, answer)
-            if (response.isNotEmpty()) {
-                inject(output, response)
-                return
-            }
-        }
-        // Fallback: send the raw DNS query packet through OpenFlux tunnel (exit node handles UDP NAT)
-        val sendErr = Mobilecore.sendOpenFlux(request)
-        if (sendErr.isNullOrEmpty()) {
-            pktsUp.incrementAndGet()
-            bytesUp.addAndGet(request.size.toLong())
-        }
-    }
-
-    private fun queryDnsUdp(query: ByteArray, dnsServer: String): ByteArray? {
-        val targetIp = if (dnsServer.isNotBlank()) dnsServer.trim() else "77.88.8.8"
-        return try {
-            java.net.DatagramSocket().use { socket ->
-                socketProtector?.invoke(socket)
-                socket.soTimeout = 2500
-                val addr = java.net.InetAddress.getByName(targetIp)
-                socket.send(java.net.DatagramPacket(query, query.size, addr, 53))
-                val buffer = ByteArray(4096)
-                val response = java.net.DatagramPacket(buffer, buffer.size)
-                socket.receive(response)
-                Arrays.copyOf(buffer, response.length)
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     private fun inject(output: FileOutputStream, packet: ByteArray) {
         if (closed.get()) return
         synchronized(outputLock) {
@@ -282,12 +231,6 @@ internal class OpenFluxSession(
 
         private fun isIpv4Udp(packet: ByteArray): Boolean =
             packet.size >= 28 && (packet[0].toInt() ushr 4) == 4 && (packet[9].toInt() and 0xff) == 17
-
-        private fun isIpv4UdpDns(packet: ByteArray): Boolean {
-            if (!isIpv4Udp(packet)) return false
-            val header = (packet[0].toInt() and 0x0f) * 4
-            return header >= 20 && packet.size >= header + 8 && unsignedShort(packet, header + 2) == 53
-        }
 
         internal fun buildTcpRst(orig: ByteArray): ByteArray {
             if (orig.size < 20) return ByteArray(0)
@@ -360,29 +303,6 @@ internal class OpenFluxSession(
             putShort(ip, 10, checksum(ip, 0, 20))
             System.arraycopy(icmp, 0, ip, 20, icmpLen)
             return ip
-        }
-
-        private fun buildDnsResponse(request: ByteArray, dns: ByteArray): ByteArray {
-            val requestHeader = (request[0].toInt() and 0x0f) * 4
-            if (request.size < requestHeader + 2) return ByteArray(0)
-            val response = ByteArray(20 + 8 + dns.size)
-            response[0] = 0x45
-            response[1] = request[1]
-            putShort(response, 2, response.size)
-            response[4] = request[4]
-            response[5] = request[5]
-            response[8] = 64
-            response[9] = 17
-            System.arraycopy(request, 16, response, 12, 4)
-            System.arraycopy(request, 12, response, 16, 4)
-            putShort(response, 10, checksum(response, 0, 20))
-
-            putShort(response, 20, 53)
-            putShort(response, 22, unsignedShort(request, requestHeader))
-            putShort(response, 24, 8 + dns.size)
-            putShort(response, 26, 0)
-            System.arraycopy(dns, 0, response, 28, dns.size)
-            return response
         }
 
         private fun checksum(bytes: ByteArray, offset: Int, length: Int): Int {
