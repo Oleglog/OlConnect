@@ -5,13 +5,17 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.Gravity
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContract
+import io.github.oleglog.olcrtc.client.R
 
 /**
  * Passes a Yandex SmartCaptcha the way a person would: in a real browser.
@@ -22,9 +26,19 @@ import androidx.activity.result.contract.ActivityResultContract
  * cannot be forged from Go, so the only honest path is to let the page run,
  * have the user tick the box, and keep the cookies the browser earned.
  *
- * The activity stays thin: it opens the document, notices the captcha host,
- * and reports the cookie jar once the browser is back on the document. Nothing
- * is scraped out of the page and no page script is injected.
+ * Two lessons from the field are baked in here:
+ *
+ * 1. Opening the document is not the same as opening the challenge. A browser
+ *    on the document page usually gets served the document and never sees a
+ *    captcha at all, so the caller may hand over the challenge URL returned by
+ *    the core (`CaptchaError`) instead.
+ * 2. The cookie jar is worth keeping even when no challenge appeared: a normal
+ *    browser session carries the reputation cookies the transport needs, so
+ *    the page is never a dead end. "Done" is always available and always
+ *    returns the jar; the activity only finishes by itself when it saw the
+ *    challenge and the browser came back to the document.
+ *
+ * Nothing is scraped out of the page and no page script is injected.
  */
 internal class CaptchaActivity : ComponentActivity() {
 
@@ -72,7 +86,30 @@ internal class CaptchaActivity : ComponentActivity() {
         }
         webView = view
         cookieManager.setAcceptThirdPartyCookies(view, true)
-        setContentView(view)
+
+        val done = Button(this).apply {
+            setText(R.string.captcha_done)
+            setOnClickListener { finishWithCookies() }
+        }
+        val root = FrameLayout(this)
+        root.addView(
+            view,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        root.addView(
+            done,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+                setMargins(0, 0, dp(16), dp(16))
+            },
+        )
+        setContentView(root)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = finishCancelled()
@@ -87,8 +124,27 @@ internal class CaptchaActivity : ComponentActivity() {
     private fun isCaptchaHost(url: String): Boolean =
         url.contains("showcaptcha") || url.contains("/checkcaptcha")
 
+    /**
+     * Collects the cookies the browser earned across every host the transport
+     * touches. The core applies them to the document's parent domain, so a
+     * header taken from one host alone misses what the other one set — and a
+     * jar that is missing `Session_id` is the same as no jar at all.
+     */
+    private fun harvestCookies(): String {
+        val manager = CookieManager.getInstance()
+        val byName = LinkedHashMap<String, String>()
+        for (host in COOKIE_HOSTS) {
+            manager.getCookie(host).orEmpty()
+                .split(';')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it.contains('=') }
+                .forEach { pair -> byName[pair.substringBefore('=')] = pair }
+        }
+        return byName.values.joinToString("; ")
+    }
+
     private fun finishWithCookies() {
-        val header = CookieManager.getInstance().getCookie(COOKIE_DOMAIN).orEmpty()
+        val header = harvestCookies()
         if (header.isBlank()) {
             finishCancelled()
             return
@@ -102,6 +158,8 @@ internal class CaptchaActivity : ComponentActivity() {
         finish()
     }
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
     override fun onDestroy() {
         webView?.let { view ->
             runCatching { view.stopLoading() }
@@ -114,7 +172,11 @@ internal class CaptchaActivity : ComponentActivity() {
     companion object {
         const val EXTRA_DOCUMENT_URL = "document_url"
         const val EXTRA_COOKIES = "cookies"
-        private const val COOKIE_DOMAIN = "https://yandex.ru"
+        private val COOKIE_HOSTS = listOf(
+            "https://yandex.ru",
+            "https://docviewer.yandex.ru",
+            "https://docs.yandex.ru",
+        )
         private const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"

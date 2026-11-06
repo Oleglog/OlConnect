@@ -182,6 +182,27 @@ func solveCaptchaHTML(body, pageURL string, jar http.CookieJar, userAgent string
 	return retpath, nil
 }
 
+// CaptchaError is ErrCaptchaRequired with the challenge page attached. The
+// interactive checkbox cannot be solved from Go, so the client has to open
+// exactly this URL in a browser and bring the cookies back; the document URL
+// is not it — the browser loads the document happily and never sees a
+// challenge.
+type CaptchaError struct {
+	Reason string
+	URL    string
+}
+
+func (e *CaptchaError) Error() string {
+	return fmt.Sprintf("%s: %s: %s", ErrCaptchaRequired, e.Reason, e.URL)
+}
+
+// Unwrap keeps errors.Is(err, ErrCaptchaRequired) working for every caller.
+func (e *CaptchaError) Unwrap() error { return ErrCaptchaRequired }
+
+func newCaptchaError(reason, pageURL string) error {
+	return &CaptchaError{Reason: reason, URL: pageURL}
+}
+
 // ---- парсинг showcaptchafast / showcaptcha ----
 
 type captchaSSRData struct {
@@ -223,7 +244,7 @@ func parseCaptchaHTML(html, pageURL string) (*captchaSSRData, string, error) {
 			// still comes back as form-fb-hint=7.73. Report it as a captcha
 			// requirement so the caller stops retrying and asks for fresh
 			// cookies instead of burning the exit IP on every attempt.
-			return nil, "", fmt.Errorf("%w: smartcaptcha checkbox", ErrCaptchaRequired)
+			return nil, "", newCaptchaError("smartcaptcha checkbox", pageURL)
 		}
 	} else if bytes.Contains([]byte(html), []byte("checkbox-captcha-form")) {
 		return nil, "", fmt.Errorf("%w: smartcaptcha checkbox", ErrCaptchaRequired)
