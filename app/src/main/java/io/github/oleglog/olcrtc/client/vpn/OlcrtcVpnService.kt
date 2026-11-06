@@ -1288,11 +1288,21 @@ class OlcrtcVpnService : VpnService() {
 
         packetFilterCache.get(cacheKey)?.let { return it }
 
-        val allowed = checkPacketAllowed(protocol, packet, srcPort, dstPort, perAppPolicy, packageRules)
-        packetFilterCache.put(cacheKey, allowed)
-        return allowed
+        val verdict = checkPacketAllowed(protocol, packet, srcPort, dstPort, perAppPolicy, packageRules)
+        // null means the owner lookup could not name the app. The packet is
+        // dropped, but the verdict is not cached: the first packet of a fresh
+        // flow can legitimately come back as INVALID_UID and must be re-checked
+        // once the socket is in the kernel table.
+        if (verdict != null) {
+            packetFilterCache.put(cacheKey, verdict)
+        }
+        return verdict ?: false
     }
 
+    /**
+     * Returns the verdict for one packet, or null when the owner UID is unknown.
+     * Callers treat null as deny-without-cache.
+     */
     private fun checkPacketAllowed(
         protocol: Int,
         packet: ByteArray,
@@ -1300,7 +1310,7 @@ class OlcrtcVpnService : VpnService() {
         dstPort: Int,
         perAppPolicy: PerAppPolicy,
         packageRules: List<RoutingRule>,
-    ): Boolean {
+    ): Boolean? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 val srcIp = InetAddress.getByAddress(packet.copyOfRange(12, 16))
@@ -1310,13 +1320,18 @@ class OlcrtcVpnService : VpnService() {
 
                 val ownerUid = connectivity.getConnectionOwnerUid(protocol, localAddress, remoteAddress)
                 if (ownerUid == android.os.Process.INVALID_UID || ownerUid <= 0) {
-                    // UID lookup for a fresh SYN / first UDP packet often returns
-                    // INVALID_UID transiently; fail-open here. OS-level
-                    // addDisallowedApplication remains the real enforcement for
-                    // excluded apps (fail-closed blackholed all new flows + poisoned
-                    // the 5-tuple cache). ponytail: fail-open, tighten only with a
-                    // re-lookup on established flows if a leak is proven.
-                    return true
+                    // ConnectivityService answers INVALID_UID in two very
+                    // different cases when the caller lacks NETWORK_STACK: the
+                    // socket is not in the table yet, or the owner exists but
+                    // the VPN does not cover it. The second one is exactly the
+                    // SO_BINDTODEVICE bypass this filter exists for — a package
+                    // excluded from the VPN binds its socket to tun0 and still
+                    // reaches the exit node (issue #5). Deny under any active
+                    // per-app policy, but return null so the verdict is not
+                    // cached: a genuine first SYN can be missed by the lookup
+                    // and must be re-checked on the next packet instead of
+                    // being blackholed for the life of the flow.
+                    return null
                 }
 
                 if (ownerUid == android.os.Process.myUid()) {
