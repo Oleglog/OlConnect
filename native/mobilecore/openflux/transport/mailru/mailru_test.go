@@ -61,14 +61,16 @@ func TestV2ChatFramesDistinguishEndpointsOnSameAccount(t *testing.T) {
 // v1.0.18 ("unthrottle") and the carrier then got cut 13-36 s into every
 // connection, authenticated sessions included.
 func TestRotationDefaultsStayUnderTheAntiAbuseBudget(t *testing.T) {
-	if defaultMailruMsgIntervalMs > 200 {
-		t.Fatalf("msg interval %dms exceeds the measured burst-safe pacing", defaultMailruMsgIntervalMs)
+	// Field measurement 2026-11-07: a connection survives ~25-40 chat frames,
+	// so pacing and rotation must spend fewer than that between swaps.
+	if defaultMailruMsgIntervalMs > 500 {
+		t.Fatalf("msg interval %dms exceeds the measured pacing", defaultMailruMsgIntervalMs)
 	}
-	if defaultMailruRotateMsgs > 60 {
-		t.Fatalf("rotate after %d messages, budget is ~80-90 per connection", defaultMailruRotateMsgs)
+	if defaultMailruRotateMsgs > 40 {
+		t.Fatalf("rotate after %d messages, the measured budget is ~25-40 per connection", defaultMailruRotateMsgs)
 	}
-	if defaultMailruRotateMs > 25000 {
-		t.Fatalf("rotate at %dms, upstream's live-tested value is 25000", defaultMailruRotateMs)
+	if defaultMailruRotateMs > 12000 {
+		t.Fatalf("rotate at %dms, 500ms pacing needs 12s to stay under the budget", defaultMailruRotateMs)
 	}
 }
 
