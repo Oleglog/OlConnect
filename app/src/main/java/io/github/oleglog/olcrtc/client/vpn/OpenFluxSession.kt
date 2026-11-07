@@ -218,6 +218,55 @@ internal class OpenFluxSession(
                 }
             }
         }
+        // TEMP DIAGNOSTIC (v1.7.30): a SYN-ACK written to the TUN never turns the
+        // socket ESTABLISHED, so ask the kernel directly what state it holds for
+        // the flow after the packet has been injected.
+        if (synAckBudget.getAndIncrement() < 20 && isTcpSynAck(packet)) {
+            val port = dstPortOf(packet)
+            if (port > 0) {
+                executeWorker {
+                    Thread.sleep(60)
+                    kernelStateFor(port)?.let { onLog("kernel state for port $port: $it") }
+                }
+            }
+        }
+    }
+
+    private val synAckBudget = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun isTcpSynAck(p: ByteArray): Boolean {
+        if (p.size < 20) return false
+        if (p[9].toInt() and 0xff != 6) return false
+        val ihl = (p[0].toInt() and 0x0f) * 4
+        if (p.size < ihl + 14) return false
+        return (p[ihl + 13].toInt() and 0x12) == 0x12
+    }
+
+    private fun dstPortOf(p: ByteArray): Int {
+        val ihl = (p[0].toInt() and 0x0f) * 4
+        if (p.size < ihl + 4) return 0
+        return ((p[ihl + 2].toInt() and 0xff) shl 8) or (p[ihl + 3].toInt() and 0xff)
+    }
+
+    /** Looks the flow up in /proc/net/tcp{,6} and returns "state=XX rem=..." for it. */
+    private fun kernelStateFor(port: Int): String? {
+        for (path in listOf("/proc/net/tcp", "/proc/net/tcp6")) {
+            val file = java.io.File(path)
+            if (!file.canRead()) return null
+            runCatching {
+                file.useLines { lines ->
+                    for (line in lines.drop(1)) {
+                        val cols = line.trim().split(Regex("\\s+"))
+                        if (cols.size < 4) continue
+                        val local = cols[1]
+                        val localPort = local.substringAfterLast(':').toIntOrNull(16) ?: continue
+                        if (localPort != port) continue
+                        return "file=$path state=${cols[3]} rem=${cols[2]}"
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun describePacket(p: ByteArray): String {
