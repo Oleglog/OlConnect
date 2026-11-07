@@ -206,6 +206,21 @@ func newCaptchaError(reason, pageURL string) error {
 	return &CaptchaError{Reason: reason, URL: pageURL}
 }
 
+// absolutizeLocation resolves a Location header that came back relative
+// against the page it was served from. It lives here because the yandex.go
+// challenge path cannot call url.Parse: its own `url` variable shadows the
+// net/url package in that scope.
+func absolutizeLocation(loc, pageURL string) string {
+	if !strings.HasPrefix(loc, "/") {
+		return loc
+	}
+	u, err := url.Parse(pageURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return loc
+	}
+	return u.Scheme + "://" + u.Host + loc
+}
+
 // ---- парсинг showcaptchafast / showcaptcha ----
 
 type captchaSSRData struct {
