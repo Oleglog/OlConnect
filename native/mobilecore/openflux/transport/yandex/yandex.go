@@ -899,6 +899,17 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 			if strings.Contains(loc, "showcaptcha") || strings.Contains(loc, "showcaptchafast") {
 				utils.Debugf("[YDOCS] captcha detected (%s), solving...", loc)
 				if _, cerr := solveCaptcha(currentURL, jar, ua); cerr != nil {
+					// The interactive checkbox cannot be solved from Go; hand the
+					// caller the challenge URL so a browser can be pointed at it.
+					challengeURL := loc
+					if strings.HasPrefix(challengeURL, "/") {
+						if u, err := url.Parse(currentURL); err == nil {
+							challengeURL = u.Scheme + "://" + u.Host + challengeURL
+						}
+					}
+					if errors.Is(cerr, ErrCaptchaRequired) {
+						return YandexDocsInfo{}, newCaptchaError("smartcaptcha checkbox", challengeURL)
+					}
 					return YandexDocsInfo{}, fmt.Errorf("captcha solve: %w", cerr)
 				}
 				utils.Debugf("[YDOCS] captcha solved, retrying original url")

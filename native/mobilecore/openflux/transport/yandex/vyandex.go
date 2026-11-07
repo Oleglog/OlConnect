@@ -263,6 +263,13 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 				}
 				nextURL, cerr := solveCaptcha(targetCaptchaURL, jar, volgaUserAgent)
 				if cerr != nil {
+					// The interactive checkbox cannot be solved from Go. Hand the
+					// caller the escalated challenge URL itself (the one carrying the
+					// d= token) so the client can open exactly that page in a browser;
+					// the document URL is not a challenge page.
+					if errors.Is(cerr, ErrCaptchaRequired) {
+						return nil, newCaptchaError("smartcaptcha checkbox", targetCaptchaURL)
+					}
 					return nil, fmt.Errorf("captcha solve: %w", cerr)
 				}
 				utils.Debugf("[VOLGA] captcha solved, retrying from %s", nextURL)

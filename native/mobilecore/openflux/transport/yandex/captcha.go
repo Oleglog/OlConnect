@@ -81,7 +81,7 @@ func solveCaptcha(docURL string, jar http.CookieJar, userAgent string) (string, 
 		}
 
 		if resp.StatusCode < 300 || resp.StatusCode >= 400 {
-			return "", fmt.Errorf("captcha unexpected status %d", resp.StatusCode)
+			return "", newCaptchaError(fmt.Sprintf("captcha status %d", resp.StatusCode), currentURL)
 		}
 
 		loc := resp.Header.Get("Location")
@@ -170,7 +170,10 @@ func solveCaptchaHTML(body, pageURL string, jar http.CookieJar, userAgent string
 		respPost.StatusCode, safeVolgaURL(respPost.Header.Get("Location")))
 
 	if respPost.StatusCode < 300 || respPost.StatusCode >= 400 {
-		return "", fmt.Errorf("captcha POST unexpected status %d", respPost.StatusCode)
+		// A refused POST means the interactive checkbox is in the way, not that
+		// something transient failed: attach the challenge page so the client
+		// can hand the user exactly that URL instead of the document.
+		return "", newCaptchaError(fmt.Sprintf("captcha POST status %d", respPost.StatusCode), pageURL)
 	}
 
 	retpath := respPost.Header.Get("Location")
