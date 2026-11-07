@@ -39,10 +39,17 @@ type VolgaConfig struct {
 	BatchSize     int
 	BatchTimeout  time.Duration
 	BatchMaxBytes int
+	// BatchBulkTimeout is how long a batch keeps collecting once the queue shows
+	// a backlog. BatchTimeout stays short so one interactive packet is never held
+	// behind a window it cannot fill.
+	BatchBulkTimeout time.Duration
 	// RequestInterval caps relay operations to the cadence accepted by the
-	// editor backend. RateLimitMaxDelay bounds exponential 429 backoff.
-	RequestInterval   time.Duration
-	RateLimitMaxDelay time.Duration
+	// editor backend. RateLimitMaxDelay bounds exponential 429 backoff, and
+	// RateLimitSlotAdvance bounds how far one 429 may push the shared slot: a
+	// single rejection must not park the whole pool.
+	RequestInterval      time.Duration
+	RateLimitMaxDelay    time.Duration
+	RateLimitSlotAdvance time.Duration
 
 	MaxPayloadBytes int
 	MinPayloadBytes int
@@ -68,10 +75,9 @@ func DefaultVolgaConfig() VolgaConfig {
 	// Batching is the only lever on page latency for this carrier: every batch
 	// is one HTTP round trip to the Volga relay, which meters requests and
 	// answers 429 when they come too fast (seen on the stand as
-	// "relay rate limited (429); retrying batch in 20/40/80/160ms"). These three
+	// "relay rate limited (429); retrying batch in 20/40/80/160ms"). These
 	// knobs are read here so the stand can A/B them without a rebuild; the
 	// defaults are the values the field runs with.
-	batchSize := envIntDefault("OPENFLUX_VOLGA_BATCH", 10)
 	batchTimeout := time.Duration(envIntDefault("OPENFLUX_VOLGA_BATCH_TIMEOUT_MS", 20)) * time.Millisecond
 	// Each batch is one HTTP round trip to the relay, so the bytes per batch —
 	// not the request rate — are what the phone pays for: at the measured ~0.5 s
@@ -79,13 +85,37 @@ func DefaultVolgaConfig() VolgaConfig {
 	// caps it at ~96 KB/s for the same number of metered requests. The wire
 	// length is a uint16 in the relay frame, so 48 KB stays well inside it.
 	batchMaxBytes := envIntDefault("OPENFLUX_VOLGA_BATCH_BYTES", 48*1024)
+	// The packet cap is derived from the byte cap, not configured beside it.
+	// Measured 2026-11-07 on the stand: with BatchSize 10 the batcher stopped at
+	// ~12 KB no matter what BatchMaxBytes said, so raising the byte cap 24 -> 48
+	// KB was dead weight — the same class of bug as vp8.max_sample_bytes, where a
+	// counter capped the batch before its byte budget could apply. OPENFLUX_VOLGA_BATCH
+	// is still honoured when set, and only then may it undercut the byte cap.
+	batchSize := envIntDefault("OPENFLUX_VOLGA_BATCH", 0)
+	if batchSize <= 0 {
+		batchSize = deriveBatchSize(batchMaxBytes)
+	}
 	// Three relay workers, measured on the stand with a 4-minute soak per point:
 	// 1 worker 6.6-6.9 s per page, 2 workers 5.98 s, 3 workers 4.88 and 5.46 s,
 	// 5 workers 5.25 s with the relay answering 429 in bursts. One worker
 	// serialises every batch behind a single HTTP round trip, so parallelism is
 	// the only lever left on latency for this carrier.
-	workers := envIntDefault("OPENFLUX_VOLGA_WORKERS", 3)
+	//
+	// Then measured again 2026-11-07 under a real 1 MB transfer: the inflow into
+	// the batcher was ~8 packets/s, so six workers each collected 1.3 packets per
+	// window and every batch stayed at 1-2 packets; `busy 0-1/6` showed the pool
+	// idle. Fewer workers collect more per batch at the same inflow, which is
+	// what makes the byte cap reachable, so the default is 2 and the ceiling is
+	// small on purpose: a phone must not open dozens of HTTP streams.
+	workers := envIntDefault("OPENFLUX_VOLGA_WORKERS", 2)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > maxVolgaWorkers {
+		workers = maxVolgaWorkers
+	}
 	requestInterval := time.Duration(envIntDefault("OPENFLUX_VOLGA_REQUEST_INTERVAL_MS", 20)) * time.Millisecond
+	batchBulkTimeout := time.Duration(envIntDefault("OPENFLUX_VOLGA_BULK_TIMEOUT_MS", 1000)) * time.Millisecond
 	return VolgaConfig{
 		MaxIdleConnsPerHost: 2000,
 		MaxIdleConns:        4000,
@@ -98,8 +128,14 @@ func DefaultVolgaConfig() VolgaConfig {
 		BatchSize:         batchSize,
 		BatchTimeout:      batchTimeout,
 		BatchMaxBytes:     batchMaxBytes,
+		BatchBulkTimeout:  batchBulkTimeout,
 		RequestInterval:   requestInterval,
-		RateLimitMaxDelay: 5 * time.Second,
+		// A 429 used to park the shared slot for up to 5 s while the relay was
+		// answering 50-70% of requests with 429 at 3 req/s; measured across a
+		// 1 MB transfer that turned into a pool that looked idle. 500 ms caps one
+		// worker's backoff without stalling the others.
+		RateLimitMaxDelay:    500 * time.Millisecond,
+		RateLimitSlotAdvance: requestInterval,
 
 		MaxPayloadBytes: (1 << 16) - 1,
 		MinPayloadBytes: 200,
@@ -129,13 +165,43 @@ func SlimVolgaConfig() VolgaConfig {
 	c.WorkerCount = 1
 	c.QueueSize = 4096
 	c.BatchMaxBytes = 24 * 1024
+	c.BatchSize = deriveBatchSize(c.BatchMaxBytes)
 	c.RequestInterval = 30 * time.Millisecond
+	c.RateLimitSlotAdvance = c.RequestInterval
 	c.WSReadBufferSize = 128 << 10
 	c.WSWriteBufferSize = 128 << 10
 	return c
 }
 
 const volgaUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
+
+const (
+	// maxVolgaWorkers keeps a phone or a small server from opening dozens of
+	// relay streams. More workers only help when the inflow can fill each batch,
+	// which this carrier does not provide (see DefaultVolgaConfig).
+	maxVolgaWorkers = 4
+	// volgaNominalPacketBytes is the payload the tunnel actually puts on the wire
+	// (one video sample = one KCP segment). Batching is derived from it so the
+	// byte cap stays reachable: a packet counter below cap/nominal would clip the
+	// batch before its byte budget applied.
+	volgaNominalPacketBytes = 1200
+	// minVolgaBatchSize keeps tiny byte caps from producing one-packet batches.
+	minVolgaBatchSize = 10
+)
+
+// deriveBatchSize returns the packet count that lets BatchMaxBytes be reached
+// with nominal-sized packets. An explicit OPENFLUX_VOLGA_BATCH overrides it,
+// because an operator asking for a packet cap wants exactly that.
+func deriveBatchSize(batchMaxBytes int) int {
+	if batchMaxBytes <= 0 {
+		return minVolgaBatchSize
+	}
+	size := (batchMaxBytes + volgaNominalPacketBytes - 1) / volgaNominalPacketBytes
+	if size < minVolgaBatchSize {
+		size = minVolgaBatchSize
+	}
+	return size
+}
 
 var reClientConfig = regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*?)</script>`)
 
@@ -180,9 +246,13 @@ type VolgaStats struct {
 	HTTPReqsFailed    atomic.Uint64
 	WSReconnects      atomic.Uint64
 	QueueDrops        atomic.Uint64
-	WorkerBusy        atomic.Int64
-	BatchesSent       atomic.Uint64
-	PacketsBatched    atomic.Uint64
+	WorkerBusy       atomic.Int64
+	// WorkerCollecting is the pool members currently filling a batch. Busy does
+	// not cover it: waiting for packets is not work, and without this counter a
+	// starved batcher looks exactly like a pool with nothing to do.
+	WorkerCollecting atomic.Int64
+	BatchesSent      atomic.Uint64
+	PacketsBatched   atomic.Uint64
 }
 
 type volgaAuth struct {
@@ -688,38 +758,10 @@ func (r *relayClient) worker(id int) {
 			first = pkt
 		}
 
-		batch := make([][]byte, 0, r.config.BatchSize)
-		batch = append(batch, first)
-		totalBytes := len(first)
-		timer := time.NewTimer(r.config.BatchTimeout)
-
-	collect:
-		for len(batch) < r.config.BatchSize && totalBytes < r.config.BatchMaxBytes {
-			select {
-			case <-r.ctx.Done():
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				return
-			case pkt, ok := <-r.batchQueue:
-				if !ok {
-					break collect
-				}
-				batch = append(batch, pkt)
-				totalBytes += len(pkt)
-			case <-timer.C:
-				break collect
-			}
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
+		r.stats.WorkerCollecting.Add(1)
+		batch, _ := r.collectBatch(first)
+		r.stats.WorkerCollecting.Add(-1)
+		r.stats.PacketsBatched.Add(uint64(len(batch)))
 
 		r.stats.WorkerBusy.Add(1)
 		err := r.sendBatchWithRetry(batch)
@@ -731,6 +773,67 @@ func (r *relayClient) worker(id int) {
 		}
 		r.stats.WorkerBusy.Add(-1)
 	}
+}
+
+// collectBatch fills one batch from the queue. Bytes decide when to stop: the
+// packet count is only a derived ceiling (see deriveBatchSize), because a
+// counter that trips first silently makes BatchMaxBytes unreachable — the
+// defect behind both vp8.max_sample_bytes and the old 10-packet cap here.
+//
+// The deadline is two-phase. BatchTimeout is short so a lone interactive packet
+// is not delayed behind a window it cannot fill; as soon as the queue shows a
+// backlog (someone is actually pushing bulk) the window extends to
+// BatchBulkTimeout, which is what lets a batch reach the byte cap at the ~8
+// packets/s inflow this carrier actually delivers.
+func (r *relayClient) collectBatch(first []byte) ([][]byte, int) {
+	limit := r.config.BatchMaxBytes
+	if limit <= 0 {
+		limit = 24 * 1024
+	}
+	batch := make([][]byte, 0, r.config.BatchSize)
+	batch = append(batch, first)
+	totalBytes := len(first)
+
+	deadline := time.Now().Add(r.config.BatchTimeout)
+	bulkAt := deadline
+	batchFull := func() bool { return totalBytes >= limit || len(batch) >= r.config.BatchSize }
+
+	timer := time.NewTimer(r.config.BatchTimeout)
+	defer timer.Stop()
+
+	for !batchFull() {
+		if !time.Now().Before(deadline) {
+			// Reached the current deadline: extend once if the queue still has
+			// work queued behind us, otherwise the tunnel is idle and this is an
+			// interactive packet that should go out now.
+			if r.config.BatchBulkTimeout > 0 && len(r.batchQueue) > 0 && deadline.Equal(bulkAt) {
+				deadline = time.Now().Add(r.config.BatchBulkTimeout)
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(time.Until(deadline))
+				continue
+			}
+			return batch, totalBytes
+		}
+
+		select {
+		case <-r.ctx.Done():
+			return batch, totalBytes
+		case pkt, ok := <-r.batchQueue:
+			if !ok {
+				return batch, totalBytes
+			}
+			batch = append(batch, pkt)
+			totalBytes += len(pkt)
+		case <-timer.C:
+			// Fall through to the deadline check above.
+		}
+	}
+	return batch, totalBytes
 }
 
 type rateLimitError struct {
@@ -755,6 +858,19 @@ func (r *relayClient) sendBatchWithRetry(batch [][]byte) error {
 		}
 		delay := r.noteRateLimited(limited.retryAfter)
 		utils.Debugf("[VOLGA] relay rate limited (429); retrying batch in %v", delay)
+		if delay > 0 {
+			// The backoff belongs to this worker. Pushing it onto the shared
+			// request slot (the old behaviour) let one 429 park every worker for
+			// up to 5 s, which is what a pool that looks idle under 50-70% 429s
+			// actually was.
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-r.ctx.Done():
+				timer.Stop()
+				return r.ctx.Err()
+			}
+		}
 	}
 }
 
@@ -807,7 +923,17 @@ func (r *relayClient) noteRateLimited(serverDelay time.Duration) time.Duration {
 	if serverDelay > delay {
 		delay = serverDelay
 	}
-	if next := time.Now().Add(delay); next.After(r.nextRequest) {
+	// Advance the shared slot by at most one interval: this 429 belongs to the
+	// calling worker, which sleeps it out in sendBatchWithRetry. Anything larger
+	// here serialises the whole pool behind one rejection.
+	advance := r.config.RateLimitSlotAdvance
+	if advance <= 0 {
+		advance = r.config.RequestInterval
+	}
+	if advance <= 0 {
+		advance = 20 * time.Millisecond
+	}
+	if next := time.Now().Add(advance); next.After(r.nextRequest) {
 		r.nextRequest = next
 	}
 	return delay
@@ -1512,13 +1638,14 @@ func (t *YandexVolgaTransport) statsLoop() {
 			batches := t.stats.BatchesSent.Load()
 			batched := t.stats.PacketsBatched.Load()
 
-			utils.Debugf("[VOLGA-STATS] send %d pkt/s (%d KB/s) | http %d req/s fail %d | batch %d (avg %.1f pkt) | recv %d pkt/s (%d KB/s) | busy %d/%d",
+			utils.Debugf("[VOLGA-STATS] send %d pkt/s (%d KB/s) | http %d req/s fail %d | batch %d (avg %.1f pkt) | recv %d pkt/s (%d KB/s) | busy %d/%d collect %d/%d",
 				(sent-lastSent)/5, (bytes-lastBytes)/5/1024,
 				(httpReqs-lastHTTP)/5, failed-lastFailed,
 				(batches-lastBatches)/5,
 				float64(batched-lastBatched)/float64(maxU64(batches-lastBatches, 1)),
 				(recv-lastRecv)/5, (recvBytes-lastRecvBytes)/5/1024,
-				t.stats.WorkerBusy.Load(), t.config.WorkerCount)
+				t.stats.WorkerBusy.Load(), t.config.WorkerCount,
+				t.stats.WorkerCollecting.Load(), t.config.WorkerCount)
 
 			lastSent, lastBytes = sent, bytes
 			lastHTTP, lastFailed = httpReqs, failed
