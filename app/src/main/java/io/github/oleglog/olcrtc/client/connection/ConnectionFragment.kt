@@ -1328,8 +1328,8 @@ class ConnectionFragment : Fragment() {
                 }
                 logCaptcha(
                     "sheet returned ${describeCookieJar(cookies)} reference=$reference " +
-                        "config=${config?.let { it::class.simpleName }}" +
-                        "carrier=${(config as? ProfileConfig.OpenFlux)?.value?.transport?.value}",
+                        "config=${config?.javaClass?.simpleName}" +
+                        " carrier=${(config as? ProfileConfig.OpenFlux)?.value?.transport?.value}",
                 )
                 val plan = captchaRecoveryPlan(reference, config, cookies) ?: return@runCatching null
                 when {
