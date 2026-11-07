@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -112,16 +114,23 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		RoomGoneRetryMax: 30 * time.Minute,
 
 		BatchMaxPackets: 256,
-		BatchMaxBytes:   22000,
+		// Every batch waits one ARQ round trip (measured srtt 312-424 ms on the
+		// stand), so the bytes per batch are the throughput: 22 KB per round trip
+		// capped a download at 40-83 KB/s while the rooms themselves were idle.
+		// 48 KB is the same batch count the other carriers ship with and still
+		// fits the framed piece limit (maxRoomPieceBytes) whole.
+		// OPENFLUX_CUPS_BATCH_BYTES overrides it.
+		BatchMaxBytes: cupsEnvInt("OPENFLUX_CUPS_BATCH_BYTES", 48000),
 		// 8192 байт данных → 2 байта заголовка → ~684 курсора → провод ~34 KB;
-		// проверено: сервер принимает без ошибок.
-		MaxMessageData: 8192,
+		// проверено: сервер принимает без ошибок. OPENFLUX_CUPS_MAX_MESSAGE
+		// поднимает полезную нагрузку сообщения (сервер принимал ~21 KB).
+		MaxMessageData: cupsEnvInt("OPENFLUX_CUPS_MAX_MESSAGE", 8192),
 		MaxCursors:     1000,
 		BatchTimeout:   2 * time.Millisecond,
 		// 12ms (~83 msg/s per channel) — calibrated by bench_tune.py:
 		// 8192B@12ms = 447 KB/s per lane (2.8× vs old 4096@18ms=159 KB/s);
-		// 10ms triggers 403.
-		SendInterval: 12 * time.Millisecond,
+		// 10ms triggers 403. OPENFLUX_CUPS_SEND_INTERVAL_MS overrides it.
+		SendInterval: time.Duration(cupsEnvInt("OPENFLUX_CUPS_SEND_INTERVAL_MS", 12)) * time.Millisecond,
 
 		// В очереди кадры кодека (до ~8 KB), а не IP-пакеты: очередь длиннее
 		// — это уже не буфер, а секунды задержки.
@@ -136,11 +145,27 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// помещается и режется на сообщения при отправке.
 		MaxPayloadBytes: 65535,
 
-		NumRooms:        4,
+		// Four rooms is what Cups.online hands out per session; more rooms mean
+		// more parallel channels for the same round trip, and the room list is
+		// carried to the client in the URL, so both sides stay in step.
+		// OPENFLUX_CUPS_ROOMS overrides it.
+		NumRooms:        cupsEnvInt("OPENFLUX_CUPS_ROOMS", 4),
 		RoomCreatePause: 500 * time.Millisecond,
 
 		StatsInterval: 5 * time.Second,
 	}
+}
+
+// cupsEnvInt reads an integer knob from the environment, falling back to def.
+// The stand sweeps a carrier's limits without a rebuild (see the OPENFLUX_CUPS_*
+// names in DefaultCupsConfig).
+func cupsEnvInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return def
 }
 
 var (
@@ -1390,14 +1415,18 @@ func (t *CupsonlineTransport) Receive(callback func([]byte)) {
 }
 
 // cupsPreferredBatchBytes sizes the upper coalescing layer's batches to the
-// inner batcher: a codec frame arrives here whole (up to ~8 KB after zstd)
-// and Send pins it to one room, so the upper batch should hold several frames
-// — enough that round-robin spreads them over all 4 rooms, small enough to
-// stay under BatchMaxBytes (22 KB) once framed. OPENFLUX_BATCH_BYTES overrides.
-const cupsPreferredBatchBytes = 16_000
-
-// PreferredBatchBytes implements transport.BatchSizeHinter.
-func (t *CupsonlineTransport) PreferredBatchBytes() int { return cupsPreferredBatchBytes }
+// inner batcher: a codec frame arrives here whole (up to ~8 KB after zstd) and
+// Send pins it to one room, so the upper batch should hold several frames —
+// enough that round-robin spreads them over all 4 rooms, small enough to stay
+// under BatchMaxBytes once framed. It follows the configured BatchMaxBytes
+// (three quarters of it leaves room for the framing) instead of a fixed 16 KB,
+// so raising the carrier's batch on the stand raises both layers.
+func (t *CupsonlineTransport) PreferredBatchBytes() int {
+	if t.config.BatchMaxBytes <= 0 {
+		return 16_000
+	}
+	return t.config.BatchMaxBytes * 3 / 4
+}
 
 // IsConnected is true while at least one room's channel is up, so the app
 // stops claiming "connected" once every room has gone away.
