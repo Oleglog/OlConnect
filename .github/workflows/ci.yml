@@ -24,3 +24,71 @@ jobs:
           cache-dependency-path: native/mobilecore/go.sum
       - run: go mod tidy
       - run: go test ./...
+
+  android-unit-tests:
+    name: Android unit tests
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/28.2.13676358
+    steps:
+      - uses: actions/checkout@v4
+
+      # The app module compiles against the gomobile AAR, so the JVM test task
+      # needs the same native artifact the release build uses.
+      - name: Restore mobilecore build cache
+        id: mobilecore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/bin/gomobile
+            app/libs/mobilecore.aar
+          key: mobilecore-${{ runner.os }}-android-all-${{ hashFiles('scripts/build_mobilecore.sh', 'native/mobilecore/go.mod', 'native/mobilecore/go.sum', 'native/mobilecore/**/*.go') }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/mobilecore/go.mod
+          cache: true
+          cache-dependency-path: native/mobilecore/go.*
+
+      - name: Install Android SDK components
+        run: |
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/tools/bin:${PATH}"
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+
+      - name: Build native mobilecore
+        run: scripts/build_mobilecore.sh
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          MOBILECORE_TARGET: android
+
+      - name: Verify mobilecore AAR dependency metadata
+        run: scripts/verify_mobilecore_artifact.sh
+
+      - name: Save mobilecore AAR cache
+        if: steps.mobilecore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/bin/gomobile
+            app/libs/mobilecore.aar
+          key: ${{ steps.mobilecore-cache.outputs.cache-primary-key }}
+
+      - name: Run JVM unit tests
+        run: ./gradlew --no-daemon --build-cache :app:testDebugUnitTest
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore

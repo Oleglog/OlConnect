@@ -30,6 +30,10 @@
     <string name="profile_field_cookies">Session cookies (Mail.ru / Yandex)</string>
     <string name="profile_cookies_paste">Paste cookies</string>
     <string name="profile_cookies_clear">Clear</string>
+    <string name="captcha_prompt_title">Yandex wants a captcha</string>
+    <string name="captcha_prompt_message">This document is gated by a captcha. Pass it in the browser: the cookies go into the profile and the connection restarts by itself.</string>
+    <string name="captcha_cookies_saved">Cookies saved to the profile, reconnecting</string>
+    <string name="captcha_recovery_unavailable">These cookies cannot be applied: open the profile editor and paste them into the cookies field</string>
     <string name="profile_captcha_pass">Pass the captcha in a browser</string>
     <string name="captcha_done">Done — save cookies</string>
     <string name="profile_field_vp8_fps">VP8 frames per second</string>
@@ -422,7 +426,7 @@
     <string name="vpn_stage_verify_datapath">Checking internet access</string>
     <string name="vpn_error_invalid_profile">The connection is missing or contains invalid parameters</string>
     <string name="vpn_error_authentication">Connection authentication failed</string>
-    <string name="vpn_error_captcha">Yandex requires a captcha for this document. Open it in a browser from this network, pass the captcha, then export fresh cookies into the profile</string>
+    <string name="vpn_error_captcha">Yandex requires a captcha for this document. Tap the captcha button: the cookies are saved into the profile and the connection restarts automatically</string>
     <string name="vpn_error_timeout">The service did not respond in time</string>
     <string name="vpn_error_network">The physical network is unavailable</string>
     <string name="vpn_error_generic">Unable to establish the VPN connection</string>

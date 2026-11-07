@@ -12,6 +12,7 @@ interface IOlcrtcVpnService {
     long testConnectionLatency();
     long[] getTrafficSnapshot();
     String getActiveProfileReference();
+    String getPendingCaptchaUrl();
     int getState();
     void registerCallback(IVpnStateCallback callback);
     void unregisterCallback(IVpnStateCallback callback);

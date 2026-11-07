@@ -532,6 +532,11 @@ class MainActivity : AppCompatActivity() {
 
     fun activeProfileReference(): String? = runCatching { vpn?.activeProfileReference }.getOrNull()
 
+    // Challenge page of the captcha that stopped the last attempt, or null when
+    // the current failure is something else. Lets the connection screen offer
+    // the browser pass without learning the profile editor's secrets.
+    fun pendingCaptchaUrl(): String? = runCatching { vpn?.pendingCaptchaUrl }.getOrNull()
+
     fun currentVpnState(): VpnState = runCatching {
         vpn?.state?.let { VpnState.entries.getOrNull(it) }
     }.getOrNull() ?: lastVpnState

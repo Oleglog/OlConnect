@@ -465,12 +465,6 @@ internal object ProfileEditorDialog {
         }
     }
 
-    // "auto" is included because a Yandex link resolves to a Yandex carrier at
-    // start; offering the browser for an auto profile costs nothing and covers
-    // the common case where the user never picks the transport explicitly.
-    private fun isYandexCarrier(transport: String): Boolean =
-        transport.lowercase() in setOf("vyandex", "yandex", "volga", "auto")
-
     private fun field(
         fragment: Fragment,
         form: LinearLayout,

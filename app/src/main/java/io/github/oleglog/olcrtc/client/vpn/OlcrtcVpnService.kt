@@ -27,6 +27,7 @@ import android.os.UserManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.github.oleglog.olcrtc.client.R
+import io.github.oleglog.olcrtc.client.connection.captchaChallengeUrl
 import io.github.oleglog.olcrtc.client.data.ProfileConfig
 import io.github.oleglog.olcrtc.client.data.ProfileRepository
 import io.github.oleglog.olcrtc.client.diagnostics.DiagnosticsLogStore
@@ -71,6 +72,9 @@ class OlcrtcVpnService : VpnService() {
     private var publishedState = VpnState.NO_PROFILE
     @Volatile private var publishedStage = ConnectionStage.IDLE
     @Volatile private var publishedError: String? = null
+    // Challenge page the browser has to open to clear the current ERROR. Null
+    // unless the last published error was a Yandex captcha.
+    @Volatile private var publishedCaptchaUrl: String? = null
     private lateinit var profiles: ProfileRepository
     private lateinit var routingSettings: RoutingSettings
     private lateinit var connectionSessions: ConnectionSessionRepository
@@ -194,6 +198,8 @@ class OlcrtcVpnService : VpnService() {
         )
 
         override fun getActiveProfileReference(): String? = activeProfile?.sessionId
+
+        override fun getPendingCaptchaUrl(): String? = publishedCaptchaUrl
 
         override fun getState(): Int = publishedState.ordinal
 
@@ -387,6 +393,7 @@ class OlcrtcVpnService : VpnService() {
         cancelAutomaticReconnect()
         cancelConnectionAttempt("new profile requested")
         publishedError = null
+        publishedCaptchaUrl = null
         // Any manual start re-anchors the failover walk (issue #47).
         failoverState = ProfileFailover.FailoverState()
 
@@ -399,6 +406,7 @@ class OlcrtcVpnService : VpnService() {
             if (switchingProfile) {
                 persistVpnIntent(true, previousReference)
                 publishedError = userConnectionError(error)
+                publishedCaptchaUrl = null
                 notifyCallbacks()
                 return
             }
@@ -731,11 +739,14 @@ class OlcrtcVpnService : VpnService() {
         if (error is CancellationException) return
         if (isFatalReconnectError(error)) {
             val userError = userConnectionError(error)
+            // A captcha is the one fatal error the user can clear without
+            // touching the profile editor, so carry the challenge page with it.
+            val captchaUrl = captchaChallengeUrl(rawErrorMessage(error))
             failoverState = ProfileFailover.onSuccess()
             cancelAutomaticReconnect()
             finishConnectionSession(error.message ?: error.javaClass.simpleName)
             persistVpnIntent(false, activeProfile ?: persistedProfileReference())
-            transition(VpnState.ERROR, userError)
+            transition(VpnState.ERROR, userError, captchaUrl)
             releaseWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
             return
@@ -842,6 +853,13 @@ class OlcrtcVpnService : VpnService() {
 
     private fun isFatalReconnectError(error: Throwable): Boolean =
         isFatalConnectionError(error, GomobileCore::isFatalError)
+
+    // The core renders a captcha as "yandex docs: captcha required: <reason>:
+    // <url>" and the transport buries it in a log tail, so every cause is read.
+    private fun rawErrorMessage(error: Throwable): String =
+        generateSequence(error) { it.cause }
+            .mapNotNull(Throwable::message)
+            .joinToString("\n")
 
     private fun userConnectionError(error: Throwable): String {
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
@@ -1459,10 +1477,11 @@ class OlcrtcVpnService : VpnService() {
         )
     }
 
-    private fun transition(state: VpnState, error: String? = null) {
+    private fun transition(state: VpnState, error: String? = null, captchaUrl: String? = null) {
         stateMachine.transition(state)
         publishedState = state
         publishedError = error
+        publishedCaptchaUrl = captchaUrl
         if (state == VpnState.NO_PROFILE || state == VpnState.DISCONNECTED) publishedStage = ConnectionStage.IDLE
         if (::diagnostics.isInitialized) {
             diagnostics.append(

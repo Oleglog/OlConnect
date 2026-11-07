@@ -846,6 +846,9 @@ class ConnectionFragment : Fragment() {
         }
         binding.connectionStatusDot.alpha = if (state == VpnState.CONNECTED) 1f else 0.45f
         showStatus(error ?: if (state == VpnState.ERROR) getString(R.string.vpn_notification_error) else null)
+        if (stateChanged && state == VpnState.ERROR) {
+            activityHost.pendingCaptchaUrl()?.let(::offerCaptcha)
+        }
         updateConnectButtonText()
         applyingPulse = state == VpnState.CONNECTED
         updateConnectPulse()
@@ -1279,6 +1282,68 @@ class ConnectionFragment : Fragment() {
     private fun launchCaptchaBrowser(documentUrl: String, onCookies: (String) -> Unit) {
         captchaTarget = onCookies
         captchaBrowser.launch(documentUrl)
+    }
+
+    /**
+     * Offers the browser pass the moment the core answers a connect attempt
+     * with a captcha, so the user does not have to find the profile editor
+     * first. [challengeUrl] is the page the core named, or the Yandex home when
+     * it named none.
+     */
+    private fun offerCaptcha(challengeUrl: String) {
+        if (_binding == null) return
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.captcha_prompt_title)
+            .setMessage(R.string.captcha_prompt_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.profile_captcha_pass) { _, _ ->
+                launchCaptchaBrowser(challengeUrl, ::saveCaptchaCookies)
+            }
+            .show()
+    }
+
+    /**
+     * Writes the jar the browser earned into the profile that just failed and
+     * reconnects it, so passing the captcha is the only thing the user does.
+     */
+    private fun saveCaptchaCookies(cookies: String) {
+        if (storage.isShutdown) return
+        val reference = activityHost.activeProfileReference() ?: selectedReference()
+        storage.execute {
+            val result = runCatching {
+                val config = when {
+                    reference == null -> null
+                    reference.startsWith("subscription:") ->
+                        profiles.getSubscriptionProfile(reference.removePrefix("subscription:"))
+                    else -> reference.removePrefix("local:").toLongOrNull()?.let { profiles.get(it) }
+                }
+                val plan = captchaRecoveryPlan(reference, config, cookies) ?: return@runCatching null
+                when {
+                    plan.reference.startsWith("subscription:") -> profiles.updateSubscriptionProfile(
+                        plan.reference.removePrefix("subscription:"),
+                        ImportedProfile.OpenFlux(plan.profile),
+                    )
+                    else -> profiles.update(plan.reference.removePrefix("local:").toLong(), plan.profile)
+                }
+                plan
+            }
+            activity?.runOnUiThread {
+                if (_binding == null) return@runOnUiThread
+                result.onSuccess { plan ->
+                    if (plan == null) {
+                        showStatus(getString(R.string.captcha_recovery_unavailable))
+                        return@onSuccess
+                    }
+                    showStatus(getString(R.string.captcha_cookies_saved))
+                    loadProfiles()
+                    when {
+                        plan.reference.startsWith("subscription:") ->
+                            activityHost.requestSubscriptionVpnPermission(plan.reference.removePrefix("subscription:"))
+                        else -> activityHost.requestVpnPermission(plan.reference.removePrefix("local:").toLong())
+                    }
+                }.onFailure { showStatus(it.message ?: getString(R.string.invalid_profile)) }
+            }
+        }
     }
 
     private fun editLocalProfile(profileId: Long) {
