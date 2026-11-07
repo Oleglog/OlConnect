@@ -563,10 +563,6 @@ internal object ProfileEditorDialog {
         }
     }
 
-/** Issue #52: selectable transports per provider. Mirrors carrier_compat.go. */
-internal fun compatibleTransports(provider: OlcrtcProfile.Provider): List<OlcrtcProfile.Transport> =
-    OlcrtcProfile.Transport.entries.filter(provider::supports)
-
     private data class FormField(
         val layout: TextInputLayout,
         val input: TextInputEditText,
@@ -620,6 +616,10 @@ internal fun compatibleTransports(provider: OlcrtcProfile.Provider): List<Olcrtc
         }
     }
 }
+
+/** Issue #52: selectable transports per provider. Mirrors carrier_compat.go. */
+internal fun compatibleTransports(provider: OlcrtcProfile.Provider): List<OlcrtcProfile.Transport> =
+    OlcrtcProfile.Transport.entries.filter(provider::supports)
 
 internal fun profileEditorIsDirty(original: ProfileConfig, current: ProfileConfig?): Boolean =
     current == null || current != original
