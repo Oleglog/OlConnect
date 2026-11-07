@@ -394,15 +394,14 @@ const mailruPreferredBatchBytes = 500_000
 func (t *MailruDocsTransport) PreferredBatchBytes() int { return mailruPreferredBatchBytes }
 
 // defaultMailruMsgIntervalMs is the minimum gap between chat writes on one
-// carrier connection. 0 (no pacing) is deliberate: a field run on 2026-11-07
-// showed that pacing is what broke the tunnel. At 500 ms the exit's writes sat
-// in the queue for up to half a second, the carrier round trip grew to 1.6-3 s,
-// and TCP handshakes timed out — SYN-ACKs arrived after the client had already
-// retransmitted, and `nc` to 1.1.1.1:443 never connected. With pacing off the
-// same stand loaded pages, and the per-connection 4004 budget is respected by
-// rotating on message count instead (see mailruRotateMsgs).
+// carrier connection. Pacing stays: without it the client's write queue bursts
+// (events, retransmits) and the carrier cuts the connection after ~25 frames —
+// measured on 2026-11-07 as 11 kicks in five minutes right after pacing was
+// removed. 500 ms (2/s) keeps the burst flat; the price is latency, and the
+// separate time-based rotation that used to push the round trip to 1.6-3 s is
+// gone (see defaultMailruRotateMs).
 // OPENFLUX_MAILRU_MSG_INTERVAL_MS overrides it; 0 disables pacing.
-const defaultMailruMsgIntervalMs = 0
+const defaultMailruMsgIntervalMs = 500
 
 var mailruMsgInterval = func() time.Duration {
 	n := defaultMailruMsgIntervalMs
@@ -415,10 +414,11 @@ var mailruMsgInterval = func() time.Duration {
 }()
 
 // defaultMailruRotateMs is the connection age at which the carrier WebSocket is
-// preemptively rotated. 0 disables the time trigger on purpose: rotation is
-// driven by the message count below, which is what the carrier actually meters
-// (a connection is cut after ~25-40 chat frames). A 12 s timer fired too late
-// at high rate and too early at low rate, and every rotation costs a handshake.
+// preemptively rotated. 0 disables the time trigger: rotation is driven by the
+// frame count below, which is what the carrier meters. A 12 s timer fired late
+// at high rate (the 4004 kick lands at ~25 frames, well before 12 s of traffic)
+// and its queue stall pushed the round trip to 1.6-3 s, which broke TCP
+// handshakes on the client.
 // OPENFLUX_MAILRU_ROTATE_MS overrides it; 0 disables the timer.
 const defaultMailruRotateMs = 0
 
@@ -437,13 +437,11 @@ var mailruRotateInterval = func() time.Duration {
 const mailruRotateAuthWait = 8 * time.Second
 
 // defaultMailruRotateMsgs rotates the carrier make-before-break once this many
-// chat frames have been written on it, staying under the R7 anti-abuse budget.
-// The server cuts the connection with disconnectReason 4004 ("access deny")
-// when that budget is spent: it behaves like a message token bucket of capacity
-// ~80-90 with a slow refill (measured live), so 60 keeps a margin under the
-// worst case. This applies to authenticated sessions too — the budget is
-// per-connection, not per-account. OPENFLUX_MAILRU_ROTATE_MSGS overrides it.
-const defaultMailruRotateMsgs = 30
+// chat frames have been written on it. The carrier cuts a connection after
+// ~25 frames (measured: kick at sent=25, age 8 s), so 20 leaves a margin and
+// still keeps the connection alive long enough to be worth a handshake.
+// OPENFLUX_MAILRU_ROTATE_MSGS overrides it.
+const defaultMailruRotateMsgs = 20
 
 var mailruRotateMsgs = func() int64 {
 	n := int64(defaultMailruRotateMsgs)
