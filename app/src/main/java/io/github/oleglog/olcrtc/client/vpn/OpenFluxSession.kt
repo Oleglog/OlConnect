@@ -198,8 +198,16 @@ internal class OpenFluxSession(
         }
     }
 
+    private val injectTrace = java.util.concurrent.atomic.AtomicInteger(0)
+
     private fun inject(output: FileOutputStream, packet: ByteArray) {
         if (closed.get()) return
+        // TEMP DIAGNOSTIC (v1.7.27): the carrier delivers ~2 packets/s but the
+        // stack never ACKs, so dump the first few inbound headers to see what
+        // actually lands on the TUN.
+        if (injectTrace.get() < 300) {
+            runCatching { onLog("inbound#${injectTrace.incrementAndGet()} ${describePacket(packet)}") }
+        }
         synchronized(outputLock) {
             if (!closed.get()) {
                 runCatching {
@@ -208,6 +216,24 @@ internal class OpenFluxSession(
                 }
             }
         }
+    }
+
+    private fun describePacket(p: ByteArray): String {
+        if (p.size < 20) return "short len=${p.size}"
+        val ihl = (p[0].toInt() and 0x0f) * 4
+        if (p.size < ihl + 4) return "short ihl len=${p.size}"
+        val proto = p[9].toInt() and 0xff
+        fun b(i: Int) = (p[i].toInt() and 0xff).toString()
+        val src = "${b(12)}.${b(13)}.${b(14)}.${b(15)}"
+        val dst = "${b(16)}.${b(17)}.${b(18)}.${b(19)}"
+        val sp = ((p[ihl].toInt() and 0xff) shl 8) or (p[ihl + 1].toInt() and 0xff)
+        val dp = ((p[ihl + 2].toInt() and 0xff) shl 8) or (p[ihl + 3].toInt() and 0xff)
+        val flags = if (proto == 6 && p.size >= ihl + 14) {
+            Integer.toHexString(p[ihl + 13].toInt() and 0xff)
+        } else {
+            "-"
+        }
+        return "proto=$proto $src:$sp->$dst:$dp flags=$flags len=${p.size}"
     }
 
     override fun close() {
