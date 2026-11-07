@@ -234,6 +234,15 @@ type MailruDocsTransport struct {
 	weblink string
 	session *DocSession
 
+	// writeQueue is the one carrier write queue, shared by every session this
+	// transport opens. It used to live on the live DocSession, so between the
+	// drop of one connection and the install of the next Send failed with
+	// "no active session" for the whole 1-3s reconnect — dropping exactly the
+	// DNS replies and SYN-ACKs whose round trip was in flight and making a
+	// browsing session fail at the name-resolution step. dialAndAuth reuses it,
+	// so packets queued during the gap go out on the next connection.
+	writeQueue chan []byte
+
 	userCounter atomic.Int32
 	baseUserID  string
 
@@ -358,6 +367,7 @@ func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *M
 		weblink:       normalizeWeblink(weblink),
 	}
 	t.baseUserID = randUserID()
+	t.writeQueue = make(chan []byte, config.MaxQueueSize)
 	jar, _ := cookiejar.New(nil)
 	t.cookieJar = jar
 	return t
@@ -507,20 +517,12 @@ var mailruRotateMsgs = func() int64 {
 }()
 
 func (t *MailruDocsTransport) Send(data []byte) error {
-	if !t.IsConnected() {
-		return fmt.Errorf("transport not connected")
-	}
-
-	t.Mu.RLock()
-	session := t.session
-	t.Mu.RUnlock()
-
-	if session == nil {
-		return fmt.Errorf("no active session")
-	}
-
+	// The queue outlives any single carrier connection, so a packet handed over
+	// while the tunnel is between connections is kept rather than dropped; the
+	// writer holds it until a ready session appears. Only a genuinely full
+	// queue fails, and the caller's TCP/UDP layer retransmits that.
 	select {
-	case session.WriteQueue <- data:
+	case t.writeQueue <- data:
 		t.RecordSend(len(data))
 		return nil
 	default:
@@ -629,9 +631,9 @@ func (t *MailruDocsTransport) dialAndAuth(userID string, writeQueue chan []byte)
 	}
 	utils.Debugf("[M-DOCS] WebSocket connected")
 
-	if writeQueue == nil {
-		writeQueue = make(chan []byte, t.GetConfig().MaxQueueSize)
-	}
+	// Every session writes from the transport's single queue so a rotation
+	// carries the pending packets across instead of orphaning them.
+	writeQueue = t.writeQueue
 
 	session := &DocSession{
 		Info:       info,
@@ -776,6 +778,15 @@ func (t *MailruDocsTransport) rotationLoop() {
 			// Age-based rotation applies to authenticated sessions too: the
 			// 4004 budget and the ~45 s time kick are per-connection, so a
 			// cookie session gets cut just like an anonymous one.
+			if mailruRotateInterval <= 0 {
+				// Disabled: rotation is driven by the frame count instead (see
+				// defaultMailruRotateMs). Without this guard the age test below
+				// is always true for a 0 interval, so the transport dialed a
+				// fresh carrier on every tick — a permanent rotation loop that
+				// burned the server's per-connection budget and left the tunnel
+				// in a reconnect gap most of the time.
+				continue
+			}
 			if !t.IsRunning() || !t.IsConnected() {
 				continue
 			}
@@ -830,7 +841,17 @@ func (t *MailruDocsTransport) rotateCarrier(old *DocSession) {
 	select {
 	case <-session.authed:
 	case <-time.After(mailruRotateAuthWait):
-		utils.Debugf("[M-DOCS] rotation: new carrier auth not confirmed in %v; swapping anyway", mailruRotateAuthWait)
+		// Do not swap into a connection the server has not accepted yet: every
+		// chat frame written on it is refused, so the tunnel would go silent
+		// until the Session ARQ timed out. Keeping the current carrier is
+		// always better; if it dies the normal drop/reconnect path takes over
+		// and rotationLoop tries again.
+		utils.Debugf("[M-DOCS] rotation: new carrier not authed in %v; keeping current carrier", mailruRotateAuthWait)
+		session.retired.Store(true)
+		if session.Conn != nil {
+			_ = session.Conn.Close()
+		}
+		return
 	case <-t.Done():
 		session.retired.Store(true)
 		if session.Conn != nil {
