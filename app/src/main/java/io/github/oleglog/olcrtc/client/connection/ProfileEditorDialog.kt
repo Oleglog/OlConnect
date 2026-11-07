@@ -232,7 +232,7 @@ internal object ProfileEditorDialog {
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.MAILRU -> "Mail.ru Документы"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.TELEMOST -> "Яндекс Телемост (OpenFlux, ссылка на встречу)"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.BOARDS -> "Яндекс Доски"
-                    OpenFluxProfile.Transport.CUPSONLINE -> "ЧУПС Онлайн (cups.online)"
+                    io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.CUPSONLINE -> "ЧУПС Онлайн (cups.online)"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.BITRIX24 -> "Битрикс24"
                     io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.AVITO -> "Авито"
                 }
