@@ -394,19 +394,15 @@ const mailruPreferredBatchBytes = 500_000
 func (t *MailruDocsTransport) PreferredBatchBytes() int { return mailruPreferredBatchBytes }
 
 // defaultMailruMsgIntervalMs is the minimum gap between chat writes on one
-// carrier connection. R7 cuts an editor session with 4004 "access deny" once a
-// connection burns its message budget, and pacing is the only lever that keeps
-// it inside that budget.
-//
-// Measured live on 2026-11-07 against the same document: a client at 200 ms
-// pacing (5/s) died 4-8 s after auth with sent=21..25, while a server at 500 ms
-// pacing lasted 13-23 s with sent=25..42. That puts the budget at roughly
-// 25-40 chat messages per connection, far below the ~80-90 assumed earlier.
-// 500 ms (2/s) spends ~20 s of it, which is what the 12 s rotation needs.
-// Every message carries up to mailruPreferredBatchBytes (~500 KB), so 2/s is
-// still ~1 MB/s and does not cap throughput.
+// carrier connection. 0 (no pacing) is deliberate: a field run on 2026-11-07
+// showed that pacing is what broke the tunnel. At 500 ms the exit's writes sat
+// in the queue for up to half a second, the carrier round trip grew to 1.6-3 s,
+// and TCP handshakes timed out — SYN-ACKs arrived after the client had already
+// retransmitted, and `nc` to 1.1.1.1:443 never connected. With pacing off the
+// same stand loaded pages, and the per-connection 4004 budget is respected by
+// rotating on message count instead (see mailruRotateMsgs).
 // OPENFLUX_MAILRU_MSG_INTERVAL_MS overrides it; 0 disables pacing.
-const defaultMailruMsgIntervalMs = 500
+const defaultMailruMsgIntervalMs = 0
 
 var mailruMsgInterval = func() time.Duration {
 	n := defaultMailruMsgIntervalMs
@@ -419,17 +415,12 @@ var mailruMsgInterval = func() time.Duration {
 }()
 
 // defaultMailruRotateMs is the connection age at which the carrier WebSocket is
-// preemptively rotated make-before-break (see rotateCarrier/rotationLoop).
-//
-// The two numbers have to agree: a connection survives roughly one message
-// budget, so the rotation must fire before msgInterval * budget is spent.
-// 500 ms x 12 s = 24 messages. In the field on 2026-11-07 this pair survived
-// three minutes straight with 13 make-before-break rotations and zero 4004
-// kicks, while the old pair (200 ms, 25 s) burned ~24 messages in 5 s and was
-// kicked long before the rotation could fire — which is why the earlier
-// 12 s-vs-25 s debate measured the wrong knob.
+// preemptively rotated. 0 disables the time trigger on purpose: rotation is
+// driven by the message count below, which is what the carrier actually meters
+// (a connection is cut after ~25-40 chat frames). A 12 s timer fired too late
+// at high rate and too early at low rate, and every rotation costs a handshake.
 // OPENFLUX_MAILRU_ROTATE_MS overrides it; 0 disables the timer.
-const defaultMailruRotateMs = 12000
+const defaultMailruRotateMs = 0
 
 var mailruRotateInterval = func() time.Duration {
 	n := defaultMailruRotateMs
