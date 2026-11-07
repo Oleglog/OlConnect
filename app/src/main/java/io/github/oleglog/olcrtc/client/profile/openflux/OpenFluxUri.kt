@@ -41,6 +41,7 @@ internal object OpenFluxUri {
             OpenFluxProfile.Transport.VYANDEX -> "OpenFlux Волга"
             OpenFluxProfile.Transport.YANDEX -> "OpenFlux Яндекс"
             OpenFluxProfile.Transport.TELEMOST -> "OpenFlux Телемост"
+            OpenFluxProfile.Transport.BOARDS -> "OpenFlux Доски"
             OpenFluxProfile.Transport.CUPSONLINE -> "OpenFlux Cups"
             OpenFluxProfile.Transport.AVITO -> "OpenFlux Авито"
             OpenFluxProfile.Transport.BITRIX24 -> "OpenFlux Битрикс24"
@@ -74,6 +75,7 @@ internal object OpenFluxUri {
         val host = when (profile.transport) {
             OpenFluxProfile.Transport.MAILRU -> "mailru"
             OpenFluxProfile.Transport.TELEMOST -> "telemost"
+            OpenFluxProfile.Transport.BOARDS -> "boards"
             OpenFluxProfile.Transport.CUPSONLINE -> "cupsonline"
             OpenFluxProfile.Transport.BITRIX24 -> "bitrix24"
             OpenFluxProfile.Transport.AVITO -> "avito"

@@ -28,6 +28,7 @@ data class OpenFluxProfile(
         YANDEX("yandex"),
         MAILRU("mailru"),
         TELEMOST("telemost"),
+        BOARDS("boards"),
         CUPSONLINE("cupsonline"),
         BITRIX24("bitrix24"),
         AVITO("avito");

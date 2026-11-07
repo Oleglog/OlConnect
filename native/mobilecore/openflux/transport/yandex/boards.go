@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -40,6 +41,15 @@ const (
 
 	// Таймаут ожидания 431 в handshake.
 	boardsHandshakeWait = 15 * time.Second
+
+	// Потолок одного объекта доски. Сервер отвечает
+	// {"error":{"code":200,"securityCode":"PAYLOAD_TOO_LARGE"}} на value
+	// длиннее 65536 символов base64, то есть на payload больше 48 КиБ
+	// (измерено 2026-11-08: 49152 байта проходят, 49153 уже нет).
+	boardsMaxObjectBytes = 48 * 1024
+
+	// Батч под этот потолок с запасом на обвязку объекта.
+	boardsBatchBytes = 48000
 )
 
 // ---- внутренние типы ----
@@ -116,6 +126,11 @@ type BoardsTransport struct {
 	jarMu     sync.RWMutex
 
 	errNotifier func(err error, transportName, url, html, reason string)
+
+	// goodSocketURL is the engine.io endpoint that last completed the handshake:
+	// a shard host and the site host behave differently per deployment, and this
+	// keeps a reconnect on the endpoint that actually served us.
+	goodSocketURL atomic.Value
 }
 
 func NewBoardsTransport(rawURL string, config transport.TransportConfig) *BoardsTransport {
@@ -136,6 +151,17 @@ func NewBoardsTransport(rawURL string, config transport.TransportConfig) *Boards
 func (t *BoardsTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
 	t.errNotifier = fn
 }
+
+// PreferredBatchBytes tells the coalescing layer how many bytes fit into one
+// modify-objects event. The board's own limit is boardsMaxObjectBytes; the
+// batch stays under it so a segment-heavy burst cannot tip one message over
+// the cap and lose the whole batch to PAYLOAD_TOO_LARGE.
+func (t *BoardsTransport) PreferredBatchBytes() int { return boardsBatchBytes }
+
+// PreferredBatchLingerMs widens the coalescing window a little: one board
+// message costs a round trip (measured 0.07-0.17 s on the board's own shard),
+// so a longer window turns browsing traffic into fewer, fuller objects.
+func (t *BoardsTransport) PreferredBatchLingerMs() int { return 20 }
 
 func (t *BoardsTransport) Start() error {
 	if err := t.BaseTransport.Start(); err != nil {
@@ -267,8 +293,32 @@ func (t *BoardsTransport) authorize(hash, name string) (boardsInfo, error) {
 		}
 	}
 
-	if err := t.postAPI(client, hash, "request-guest-token",
-		map[string]string{"name": name, "hash": hash}); err != nil {
+	state, err := t.getWhiteboardInfo(client, hash)
+	if err != nil {
+		// The info call doubles as the guest admission check. A signed-in browser
+		// gets the board back; an anonymous one is answered with code 204 and a
+		// redirect to /guest, which is the guest landing page and not a refusal —
+		// the session is minted by request-guest-token right after, the same call
+		// that page makes (measured 2026-11-08 on a board with link access open:
+		// info -> 204 + /guest, then request-guest-token -> Set-Cookie
+		// token_<hash>). Only real refusals go up: 212 "Guest mode disabled"
+		// (link access off) and the hash errors.
+		var apiErr *boardsAPIError
+		if !errors.As(err, &apiErr) || !boardsGuestLanding(apiErr) {
+			return boardsInfo{}, err
+		}
+		utils.Debugf("[BOARDS] /api answered %d %q (guest landing), continuing to request-guest-token", apiErr.Code, apiErr.Description)
+		state = nil
+	}
+
+	guestContent := map[string]string{"name": name, "hash": hash}
+	if csrf := state["csrf"]; csrf != "" {
+		// wbpost() sends the csrf it got from any earlier /api reply.
+		guestContent["csrf"] = csrf
+	}
+
+	guest, err := t.postAPI(client, hash, "request-guest-token", guestContent)
+	if err != nil {
 		return boardsInfo{}, fmt.Errorf("request-guest-token: %w", err)
 	}
 
@@ -280,14 +330,36 @@ func (t *BoardsTransport) authorize(hash, name string) (boardsInfo, error) {
 		}
 	}
 	if jwt == "" {
-		return boardsInfo{}, fmt.Errorf("token_%s not found", hash)
+		// An open board answers with a redirect back to the board and the
+		// token cookie; a closed one redirects to the site root without a word.
+		if guest.Redirect != "" && !strings.Contains(guest.Redirect, hash) {
+			return boardsInfo{}, fmt.Errorf(
+				"token_%s not found: request-guest-token redirected to %s and set no cookie; the board is probably closed to guests",
+				hash, guest.Redirect)
+		}
+		return boardsInfo{}, fmt.Errorf("token_%s not found: request-guest-token set no cookie", hash)
 	}
+
 	payload := jwtPayload(jwt)
 	userHash, _ := payload["u"].(string)
 
-	state, err := t.getWhiteboardInfo(client, hash)
-	if err != nil {
-		utils.Debugf("[BOARDS] get-whiteboard-info failed: %v", err)
+	// The token turns the anonymous info into the board's own: the first call
+	// answered 204 + /guest (guest landing), so the dashboard and the shard are
+	// only known now. The guest page does the same — it follows the redirect to
+	// /whiteboard/?hash=... and the app asks again. Without this the dashboard
+	// stays empty, subscribe-slide-dashboard joins no room, and peer packets
+	// never reach each other (measured 2026-11-08: both peers logged
+	// "subscribed", zero server-modify-objects in either direction).
+	if state == nil {
+		state = map[string]string{}
+	}
+	if tokenState, terr := t.getWhiteboardInfo(client, hash); terr != nil {
+		utils.Debugf("[BOARDS] board info with token failed: %v", terr)
+	} else {
+		mergeBoardState(state, tokenState)
+	}
+	if state["dashboard"] == "" {
+		utils.Debugf("[BOARDS] board info names no dashboard; subscribe will carry the presentation only")
 	}
 
 	var cookies []*http.Cookie
@@ -330,21 +402,74 @@ func apiRequest(hash, action string, content interface{}) *http.Request {
 	return req
 }
 
-func (t *BoardsTransport) postAPI(client *http.Client, hash, action string, content interface{}) error {
+// apiResponse is the part of an /api reply we act on. The server answers
+// HTTP 200 even when it refuses the call and names the reason in "error", so
+// a status-code check alone reads a refusal as a success.
+type apiResponse struct {
+	Error *struct {
+		Code        int    `json:"code"`
+		Description string `json:"description"`
+	} `json:"error"`
+	Redirect string `json:"redirect"`
+	CSRF     string `json:"csrf"`
+}
+
+// boardsAPIError is a refusal carried in the JSON body of a 200 response.
+type boardsAPIError struct {
+	Action      string
+	Code        int
+	Description string
+	Redirect    string
+}
+
+func (e *boardsAPIError) Error() string {
+	msg := fmt.Sprintf("/api %s: code %d %q", e.Action, e.Code, e.Description)
+	if e.Redirect != "" {
+		msg += ", redirect " + e.Redirect
+	}
+	switch e.Code {
+	case 212:
+		msg += "; the board is closed to guests — ask the owner to enable link sharing (Доступ по ссылке) and to re-send the /whiteboard/?hash=... link"
+	case 250:
+		msg += "; the hash names no board"
+	case 200:
+		msg += "; the hash is not a 32-character board hash"
+	}
+	return msg
+}
+
+// decodeAPIResponse turns a 200 body into its refusal, if it carries one.
+func decodeAPIResponse(action string, body []byte) (apiResponse, error) {
+	var r apiResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return r, nil // not a refusal; leave the body to the caller
+	}
+	if r.Error == nil {
+		return r, nil
+	}
+	return r, &boardsAPIError{
+		Action:      action,
+		Code:        r.Error.Code,
+		Description: r.Error.Description,
+		Redirect:    r.Redirect,
+	}
+}
+
+func (t *BoardsTransport) postAPI(client *http.Client, hash, action string, content interface{}) (apiResponse, error) {
 	resp, err := client.Do(apiRequest(hash, action, content))
 	if err != nil {
-		return err
+		return apiResponse{}, err
 	}
 	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
 		n := len(body)
 		if n > 200 {
 			n = 200
 		}
-		return fmt.Errorf("status %d: %s", resp.StatusCode, string(body[:n]))
+		return apiResponse{}, fmt.Errorf("status %d: %s", resp.StatusCode, string(body[:n]))
 	}
-	return nil
+	return decodeAPIResponse(action, body)
 }
 
 func (t *BoardsTransport) getWhiteboardInfo(client *http.Client, hash string) (map[string]string, error) {
@@ -357,8 +482,14 @@ func (t *BoardsTransport) getWhiteboardInfo(client *http.Client, hash string) (m
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
+	// A 200 with "error" is a refusal, not an empty board: the workspace line
+	// in state["ws_host"] would otherwise just fall back to the default host.
+	if _, apiErr := decodeAPIResponse("get-whiteboard-info", body); apiErr != nil {
+		return nil, apiErr
+	}
 
 	var info struct {
+		CSRF         string `json:"csrf"`
 		Presentation struct {
 			Properties struct {
 				CurrentSlide string `json:"current_slide"`
@@ -373,6 +504,9 @@ func (t *BoardsTransport) getWhiteboardInfo(client *http.Client, hash string) (m
 		return nil, err
 	}
 	out := map[string]string{}
+	if info.CSRF != "" {
+		out["csrf"] = info.CSRF
+	}
 	if info.Presentation.Properties.CurrentSlide != "" {
 		out["current_slide"] = info.Presentation.Properties.CurrentSlide
 		out["dashboard"] = info.Presentation.Properties.CurrentSlide
@@ -486,8 +620,18 @@ func reconnectBackoffBoards(n int) time.Duration {
 	return d
 }
 
+// mergeBoardState fills dst with the non-empty entries of src. The info reply
+// fetched with the guest token supersedes the anonymous one, but a field the
+// second reply omits must not erase what the first one named.
+func mergeBoardState(dst, src map[string]string) {
+	for k, v := range src {
+		if v != "" {
+			dst[k] = v
+		}
+	}
+}
+
 func (t *BoardsTransport) connectAndServe(info boardsInfo) error {
-	wsURL := fmt.Sprintf("wss://%s/socket.io/?EIO=4&transport=websocket", info.wsHost)
 
 	header := http.Header{}
 	header.Set("User-Agent", boardsUA)
@@ -503,21 +647,47 @@ func (t *BoardsTransport) connectAndServe(info boardsInfo) error {
 	}
 	header.Set("Cookie", strings.Join(cookieParts, "; "))
 
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 15 * time.Second,
-		NetDialContext:   dialIPv4First,
-	}
-	utils.ConfigureWebsocketDialerProxy(&dialer, wsURL)
-	utils.Debugf("[BOARDS] dial %s", wsURL)
-	conn, resp, err := dialer.Dial(wsURL, header)
-	if err != nil {
+	// The board API hands out a shard host (ws_host, e.g. socket33.boards.yandex.ru),
+	// but measured 2026-11-08 that shard answers 404 for /socket.io/ while the site
+	// host answers the engine.io handshake (200 with sid/upgrades) once the Origin
+	// header is present. Try the endpoint that worked last time, then the shard,
+	// then the site host.
+	var conn *websocket.Conn
+	var dialErr error
+	dialed := ""
+	for _, candidate := range t.socketURLs(info) {
+		dialer := websocket.Dialer{
+			HandshakeTimeout: 15 * time.Second,
+			NetDialContext:   dialIPv4First,
+		}
+		utils.ConfigureWebsocketDialerProxy(&dialer, candidate)
+		utils.Debugf("[BOARDS] dial %s", candidate)
+		c, resp, err := dialer.Dial(candidate, header)
+		if err == nil {
+			conn = c
+			dialed = candidate
+			t.goodSocketURL.Store(candidate)
+			break
+		}
 		status := 0
 		if resp != nil {
 			status = resp.StatusCode
 		}
-		return fmt.Errorf("dial %s (http %d): %w", wsURL, status, err)
+		dialErr = fmt.Errorf("dial %s (http %d): %w", candidate, status, err)
 	}
-	utils.Debugf("[BOARDS] WS connected: %s", info.wsHost)
+	if conn == nil {
+		if dialErr == nil {
+			dialErr = fmt.Errorf("dial: no socket endpoint configured")
+		}
+		return dialErr
+	}
+	utils.Debugf("[BOARDS] WS connected: %s (shard %q)", dialed, info.wsHost)
+	if info.wsHost != "" && !strings.Contains(dialed, info.wsHost) {
+		// The room is per shard, so a site-host dial only works if the load
+		// balancer happens to put both peers on one front pod. Say so: the
+		// symptom otherwise is a silently dead tunnel.
+		utils.Debugf("[BOARDS] dialed %s instead of the board's shard %s: peers may land on different pods and never share a room", dialed, info.wsHost)
+	}
 
 	participant := info.userHash
 	creator := info.userHash
@@ -838,6 +1008,11 @@ func (t *BoardsTransport) handleMessage(sess *boardsSession, raw []byte) {
 
 	if bytes.HasPrefix(raw, []byte("43")) {
 		t.handle431(sess, raw)
+		if bytes.Contains(raw, []byte(`"error"`)) {
+			// Every event goes out with an ack id, so a refusal arrives here
+			// instead of the log; without this a rejected write is silent.
+			utils.Debugf("[BOARDS] event ack error: %s", shortStr(string(raw), 240))
+		}
 		return
 	}
 	if !bytes.HasPrefix(raw, []byte("42[")) {
@@ -1080,4 +1255,57 @@ func (t *BoardsTransport) ApplyCookies(values map[string]string) error {
 		_ = s.Conn.Close()
 	}
 	return nil
+}
+
+// boardsGuestLanding reports whether an /api refusal means "you are not signed
+// in" rather than "this board is closed". Yandex answers an anonymous info call
+// with code 204 (or a redirect to /guest) and mints the guest session on the
+// next call, so treating it as fatal would refuse every open board.
+func boardsGuestLanding(e *boardsAPIError) bool {
+	if e == nil {
+		return false
+	}
+	if e.Code == 204 {
+		return true
+	}
+	return strings.Contains(e.Redirect, "/guest")
+}
+
+// socketURLs lists the engine.io endpoints to try for this board, best first:
+// the board's own shard host, then the endpoint that worked last time, then the
+// site host.
+//
+// The shard goes first for a reason beyond reachability: a dashboard room is
+// per socket shard. Two guests that dial the site host are load-balanced onto
+// different front pods and never see each other's modify-objects — measured
+// 2026-11-08, two peers on boards.yandex.ru delivered nothing in either
+// direction, the same two peers on socket62.boards.yandex.ru delivered both
+// ways. The shard from get-whiteboard-info is per board, so both peers of a
+// tunnel pick the same one. The site host stays as a last resort for a shard
+// that answers 404, which is how socket33.boards.yandex.ru behaved.
+func (t *BoardsTransport) socketURLs(info boardsInfo) []string {
+	urls := make([]string, 0, 3)
+	addURL := func(u string) {
+		if u == "" {
+			return
+		}
+		for _, have := range urls {
+			if have == u {
+				return
+			}
+		}
+		urls = append(urls, u)
+	}
+	addHost := func(host string) {
+		if host == "" {
+			return
+		}
+		addURL(fmt.Sprintf("wss://%s/socket.io/?EIO=4&transport=websocket", host))
+	}
+	addHost(info.wsHost)
+	if prev, ok := t.goodSocketURL.Load().(string); ok {
+		addURL(prev)
+	}
+	addHost(boardsBase)
+	return urls
 }
