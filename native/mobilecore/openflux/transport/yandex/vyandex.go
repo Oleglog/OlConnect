@@ -1570,6 +1570,18 @@ const volgaPreferredBatchBytes = 60 * 1024
 // PreferredBatchBytes implements transport.BatchSizeHinter.
 func (t *YandexVolgaTransport) PreferredBatchBytes() int { return volgaPreferredBatchBytes }
 
+// volgaPreferredLingerMs widens the coalescing window on this carrier. Measured
+// 2026-11-08 on a 1 MB transfer through @5: the 5 ms default delivered 729-745 KB
+// in 130 s (5.6-5.7 KB/s), 100 ms delivered 908-975 KB (7.0-7.5 KB/s, +25-35 %)
+// and cost +0.28 s on a page open; 250 ms added nothing (7.1-7.2) and cost +0.7 s.
+// The relay meters requests, not bytes, so more bytes per request is the only
+// lever this carrier has, and this is it — priced in latency.
+// OPENFLUX_BATCH_LINGER_MS still overrides it.
+const volgaPreferredLingerMs = 100
+
+// PreferredBatchLingerMs implements transport.BatchLingerHinter.
+func (t *YandexVolgaTransport) PreferredBatchLingerMs() int { return volgaPreferredLingerMs }
+
 func (t *YandexVolgaTransport) IsConnected() bool {
 	return t.BaseTransport.IsConnected()
 }
