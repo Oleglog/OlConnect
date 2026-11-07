@@ -35,7 +35,8 @@
 
         <activity
             android:name=".connection.CaptchaActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@style/Theme.OlcrtcClient.CaptchaSheet" />
 
         <activity
             android:name=".settings.AppSelectorActivity"

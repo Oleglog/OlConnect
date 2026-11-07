@@ -33,6 +33,17 @@
         <item name="android:windowIsTranslucent">true</item>
     </style>
 
+    <!-- The in-app captcha: a WebView card anchored to the bottom of the screen
+         over the connection screen, instead of handing the challenge to another
+         app. Translucent + dim keeps the app visible behind the card. -->
+    <style name="Theme.OlcrtcClient.CaptchaSheet" parent="Theme.OlcrtcClient">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
     <style name="ThemeOverlay.OlcrtcClient.Bronze" parent="">
         <item name="colorPrimary">@color/olcrtc_bronze_primary</item>
         <item name="colorOnPrimary">@color/olcrtc_bronze_on_primary</item>

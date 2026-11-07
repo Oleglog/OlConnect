@@ -45,6 +45,7 @@ import io.github.oleglog.olcrtc.client.data.ProfileConfig
 import io.github.oleglog.olcrtc.client.data.ProfileRepository
 import io.github.oleglog.olcrtc.client.databinding.FragmentConnectionBinding
 import io.github.oleglog.olcrtc.client.databinding.ItemConnectionProfileBinding
+import io.github.oleglog.olcrtc.client.diagnostics.DiagnosticsLogStore
 import io.github.oleglog.olcrtc.client.importer.BundleImportDispatcher
 import io.github.oleglog.olcrtc.client.importer.BundleImportResult
 import io.github.oleglog.olcrtc.client.importer.DecodedImportPayload
@@ -70,6 +71,7 @@ class ConnectionFragment : Fragment() {
     private val profiles by lazy { ProfileRepository.open(requireContext().applicationContext) }
     private val settings by lazy { RoutingSettings.open(requireContext().applicationContext) }
     private val statistics by lazy { ConnectionSessionRepository.open(requireContext().applicationContext) }
+    private val diagnostics by lazy { DiagnosticsLogStore.open(requireContext().applicationContext) }
     private val connectivity by lazy { requireContext().getSystemService(ConnectivityManager::class.java) }
     private val storage = Executors.newSingleThreadExecutor()
     private val latency = Executors.newSingleThreadExecutor()
@@ -129,9 +131,9 @@ class ConnectionFragment : Fragment() {
         captchaTarget = null
         val cookies = result.cookies
         when {
-            cookies.isNullOrBlank() -> Unit
+            cookies.isNullOrBlank() -> logCaptcha("sheet closed without cookies (target=${target != null})")
             target != null -> target(cookies)
-            else -> Unit
+            else -> logCaptcha("sheet returned cookies but the caller is gone")
         }
     }
 
@@ -1285,13 +1287,14 @@ class ConnectionFragment : Fragment() {
     }
 
     /**
-     * Offers the browser pass the moment the core answers a connect attempt
-     * with a captcha, so the user does not have to find the profile editor
-     * first. [challengeUrl] is the page the core named, or the Yandex home when
-     * it named none.
+     * Offers the in-app captcha the moment the core answers a connect attempt
+     * with one, so the user does not have to find the profile editor first.
+     * [challengeUrl] is the page the core named, or the Yandex home when it
+     * named none.
      */
     private fun offerCaptcha(challengeUrl: String) {
         if (_binding == null) return
+        logCaptcha("offering the sheet url=$challengeUrl")
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.captcha_prompt_title)
             .setMessage(R.string.captcha_prompt_message)
@@ -1303,20 +1306,31 @@ class ConnectionFragment : Fragment() {
     }
 
     /**
-     * Writes the jar the browser earned into the profile that just failed and
+     * Writes the jar the sheet earned into the profile that just failed and
      * reconnects it, so passing the captcha is the only thing the user does.
+     *
+     * Every step is logged (logcat tag "olcrtc"): the jar the sheet returned,
+     * which profile it targets and why, what the profile reads back after the
+     * write, and that the reconnect was started. A captcha that comes back a
+     * second time then has a trace instead of a guess.
      */
     private fun saveCaptchaCookies(cookies: String) {
         if (storage.isShutdown) return
-        val reference = activityHost.activeProfileReference() ?: selectedReference()
+        val activeReference = activityHost.activeProfileReference() ?: selectedReference()
         storage.execute {
             val result = runCatching {
+                val reference = activeReference ?: persistedCaptchaReference()
                 val config = when {
                     reference == null -> null
                     reference.startsWith("subscription:") ->
                         profiles.getSubscriptionProfile(reference.removePrefix("subscription:"))
                     else -> reference.removePrefix("local:").toLongOrNull()?.let { profiles.get(it) }
                 }
+                logCaptcha(
+                    "sheet returned ${describeCookieJar(cookies)} reference=$reference " +
+                        "config=${config?.let { it::class.simpleName }}" +
+                        "carrier=${(config as? ProfileConfig.OpenFlux)?.value?.transport?.value}",
+                )
                 val plan = captchaRecoveryPlan(reference, config, cookies) ?: return@runCatching null
                 when {
                     plan.reference.startsWith("subscription:") -> profiles.updateSubscriptionProfile(
@@ -1325,25 +1339,62 @@ class ConnectionFragment : Fragment() {
                     )
                     else -> profiles.update(plan.reference.removePrefix("local:").toLong(), plan.profile)
                 }
+                // Read the profile back: a write that does not land is exactly
+                // the failure the live log could not show.
+                val readBack = when {
+                    plan.reference.startsWith("subscription:") ->
+                        (profiles.getSubscriptionProfile(plan.reference.removePrefix("subscription:"))
+                            as? ProfileConfig.OpenFlux)?.value?.cookies
+                    else -> (profiles.get(plan.reference.removePrefix("local:").toLong())
+                        as? ProfileConfig.OpenFlux)?.value?.cookies
+                }
+                logCaptcha("profile saved reference=${plan.reference} readback=${describeCookieJar(readBack)}")
                 plan
             }
             activity?.runOnUiThread {
                 if (_binding == null) return@runOnUiThread
                 result.onSuccess { plan ->
                     if (plan == null) {
+                        logCaptcha("not saved: no yandex openflux profile to write into")
                         showStatus(getString(R.string.captcha_recovery_unavailable))
                         return@onSuccess
                     }
                     showStatus(getString(R.string.captcha_cookies_saved))
                     loadProfiles()
                     when {
-                        plan.reference.startsWith("subscription:") ->
+                        plan.reference.startsWith("subscription:") -> {
+                            logCaptcha("reconnect subscription=${plan.reference}")
                             activityHost.requestSubscriptionVpnPermission(plan.reference.removePrefix("subscription:"))
-                        else -> activityHost.requestVpnPermission(plan.reference.removePrefix("local:").toLong())
+                        }
+                        else -> {
+                            logCaptcha("reconnect local=${plan.reference}")
+                            activityHost.requestVpnPermission(plan.reference.removePrefix("local:").toLong())
+                        }
                     }
-                }.onFailure { showStatus(it.message ?: getString(R.string.invalid_profile)) }
+                }.onFailure {
+                    logCaptcha("save failed: ${it.javaClass.simpleName}: ${it.message}")
+                    showStatus(it.message ?: getString(R.string.invalid_profile))
+                }
             }
         }
+    }
+
+    /**
+     * The profile the VPN was last asked to run. Used when neither the live
+     * service nor the selection names one — the captcha must land somewhere
+     * even if the screen was recreated while the sheet was open.
+     */
+    private fun persistedCaptchaReference(): String? = runCatching {
+        val intent = settings.getVpnIntent()
+        when {
+            intent.localProfileId != null -> "local:${intent.localProfileId}"
+            intent.subscriptionProfileId != null -> "subscription:${intent.subscriptionProfileId}"
+            else -> null
+        }
+    }.getOrNull()
+
+    private fun logCaptcha(message: String) {
+        diagnostics.append("info", "captcha: $message")
     }
 
     private fun editLocalProfile(profileId: Long) {

@@ -32,10 +32,14 @@
     <string name="profile_cookies_paste">Вставить куки</string>
     <string name="profile_cookies_clear">Очистить</string>
     <string name="captcha_prompt_title">Нужна капча Яндекса</string>
-    <string name="captcha_prompt_message">Документ закрыт капчей. Пройдите её в браузере: куки сохранятся в профиль, и подключение перезапустится само.</string>
+    <string name="captcha_prompt_message">Документ закрыт капчей. Откройте её ниже и отметьте галочку: куки сохранятся в профиль, и подключение перезапустится само.</string>
     <string name="captcha_cookies_saved">Куки сохранены в профиль, переподключаемся</string>
     <string name="captcha_recovery_unavailable">Эти куки некуда сохранить: откройте редактор профиля и вставьте их в поле куки</string>
-    <string name="profile_captcha_pass">Пройти капчу в браузере</string>
+    <string name="captcha_sheet_title">Капча Яндекса</string>
+    <string name="captcha_reload">Обновить</string>
+    <string name="captcha_harvest_empty">Куки Яндекса пока не появились — отметьте галочку и нажмите «Готово»</string>
+    <string name="profile_captcha_pass">Пройти капчу</string>
+    <string name="captcha_done">Готово — сохранить куки</string>
     <string name="profile_field_vp8_fps">Кадров VP8 в секунду</string>
     <string name="profile_field_vp8_batch">Размер пакета VP8</string>
     <string name="profile_speed_preset_balanced">Сбаланс. (60 fps · пакет 32)</string>

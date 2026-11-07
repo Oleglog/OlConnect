@@ -742,6 +742,13 @@ class OlcrtcVpnService : VpnService() {
             // A captcha is the one fatal error the user can clear without
             // touching the profile editor, so carry the challenge page with it.
             val captchaUrl = captchaChallengeUrl(rawErrorMessage(error))
+            if (captchaUrl != null) {
+                diagnostics.append(
+                    "info",
+                    "captcha: core asked for a captcha profile=${activeProfile?.sessionId} " +
+                        "challenge=${captchaUrl.lineSequence().first()}",
+                )
+            }
             failoverState = ProfileFailover.onSuccess()
             cancelAutomaticReconnect()
             finishConnectionSession(error.message ?: error.javaClass.simpleName)

@@ -146,4 +146,60 @@ class CaptchaRecoveryTest {
             ),
         )
     }
+
+    @Test
+    fun harvestCoversEveryHostTheCarrierTouches() {
+        // CookieManager.getCookie matches domain cookies too, so a bare host
+        // stands in for its dotted variant.
+        for (host in listOf("yandex.ru", "docs.yandex.ru", "docviewer.yandex.ru", "yandex.net")) {
+            assertTrue(host, CAPTCHA_COOKIE_HOSTS.any { it == "https://$host" })
+        }
+    }
+
+    @Test
+    fun pairsAreReadFromAHeaderAndFromCookiesTxt() {
+        assertEquals(
+            mapOf("Session_id" to "s1", "yandexuid" to "u1"),
+            cookiePairs("Session_id=s1; yandexuid=u1"),
+        )
+        // Netscape row: domain, flag, path, secure, expiry, name, value.
+        val cookiesTxt = listOf(
+            "# Netscape HTTP Cookie File",
+            "yandex.ru\tTRUE\t/\tTRUE\t0\tSession_id\ts2",
+            "#HttpOnly_.yandex.ru\tTRUE\t/\tTRUE\t0\tcookie_cap\tc1",
+        ).joinToString("\n")
+        assertEquals(
+            mapOf("Session_id" to "s2", "cookie_cap" to "c1"),
+            cookiePairs(cookiesTxt),
+        )
+        assertEquals(emptyMap<String, String>(), cookiePairs(null))
+        assertEquals(emptyMap<String, String>(), cookiePairs(" "))
+    }
+
+    @Test
+    fun lastOccurrenceOfANameWinsLikeTheCoreParser() {
+        assertEquals("new", cookiePairs("Session_id=old\nSession_id=new")["Session_id"])
+    }
+
+    @Test
+    fun domainsComeFromCookiesTxtOnly() {
+        assertEquals(listOf("yandex.ru"), cookieDomains("yandex.ru\tTRUE\t/\tTRUE\t0\tS\tv"))
+        assertEquals(emptyList<String>(), cookieDomains("Session_id=s1; yandexuid=u1"))
+    }
+
+    @Test
+    fun jarSummaryCountsNamesWithoutValues() {
+        val header = "Session_id=s1; yandexuid=u1; cookie_cap=c1"
+        assertEquals("pairs=3 names=Session_id,yandexuid,cookie_cap", describeCookieJar(header))
+        assertEquals("pairs=0", describeCookieJar(null))
+        assertEquals("pairs=0", describeCookieJar(""))
+        val described = describeCookieJar(header)
+        // A log line must never carry a cookie value.
+        assertFalse(described.contains("s1"))
+        assertFalse(described.contains("u1"))
+        assertEquals(
+            "pairs=1 names=Session_id domains=yandex.ru",
+            describeCookieJar("yandex.ru\tTRUE\t/\tTRUE\t0\tSession_id\ts1"),
+        )
+    }
 }

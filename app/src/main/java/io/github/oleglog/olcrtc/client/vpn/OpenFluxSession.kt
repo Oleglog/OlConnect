@@ -1,6 +1,7 @@
 package io.github.oleglog.olcrtc.client.vpn
 
 import android.os.ParcelFileDescriptor
+import io.github.oleglog.olcrtc.client.connection.describeCookieJar
 import io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile
 import mobilecore.Mobilecore
 import java.io.ByteArrayOutputStream
@@ -75,7 +76,15 @@ internal class OpenFluxSession(
         } else {
             Mobilecore.setOpenFluxEncryptionKey("")
         }
-        Mobilecore.setOpenFluxCookies(profile.cookies.orEmpty())
+        val cookies = profile.cookies.orEmpty()
+        // One line that answers "did the jar reach the core?": what was handed
+        // over, how big it is and for which transport. Names only, no values.
+        onLog(
+            "cookies -> core: transport=${profile.transport.value} codec=${profile.codec.value} " +
+                "chars=${cookies.length} lines=${cookies.split('\n').count(String::isNotBlank)} " +
+                describeCookieJar(cookies),
+        )
+        Mobilecore.setOpenFluxCookies(cookies)
         val error = Mobilecore.startOpenFlux(profile.documentUrl, profile.transport.value)
         if (!error.isNullOrEmpty()) {
             throw IllegalStateException(error)

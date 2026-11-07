@@ -31,10 +31,13 @@
     <string name="profile_cookies_paste">Paste cookies</string>
     <string name="profile_cookies_clear">Clear</string>
     <string name="captcha_prompt_title">Yandex wants a captcha</string>
-    <string name="captcha_prompt_message">This document is gated by a captcha. Pass it in the browser: the cookies go into the profile and the connection restarts by itself.</string>
+    <string name="captcha_prompt_message">This document is gated by a captcha. Open it below, tick the checkbox: the cookies go into the profile and the connection restarts by itself.</string>
     <string name="captcha_cookies_saved">Cookies saved to the profile, reconnecting</string>
     <string name="captcha_recovery_unavailable">These cookies cannot be applied: open the profile editor and paste them into the cookies field</string>
-    <string name="profile_captcha_pass">Pass the captcha in a browser</string>
+    <string name="captcha_sheet_title">Yandex captcha</string>
+    <string name="captcha_reload">Reload</string>
+    <string name="captcha_harvest_empty">No Yandex cookies yet — tick the checkbox, then tap Done</string>
+    <string name="profile_captcha_pass">Pass the captcha</string>
     <string name="captcha_done">Done — save cookies</string>
     <string name="profile_field_vp8_fps">VP8 frames per second</string>
     <string name="profile_field_vp8_batch">VP8 batch size</string>
