@@ -19,6 +19,7 @@ class GitHubUpdateClientTest {
         val connection = FakeConnection(200, body = latestReleaseJson(tag = "v1.2.3", assetName = "olcRTC-Client-v1.2.3-universal.apk"))
         val client = GitHubUpdateClient(
             currentVersion = "v1.2.0",
+            supportedAbis = listOf("arm64-v8a"),
             proxy = proxy,
             openConnection = { _, usedProxy ->
                 openedWith += usedProxy
@@ -44,6 +45,7 @@ class GitHubUpdateClientTest {
         val connection = FakeConnection(200, body = latestReleaseJson(tag = "v1.0.0"))
         val client = GitHubUpdateClient(
             currentVersion = "v1.0.0",
+            supportedAbis = listOf("arm64-v8a"),
             proxy = null,
             openConnection = { _, usedProxy ->
                 openedWith += usedProxy
