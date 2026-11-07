@@ -114,13 +114,14 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		RoomGoneRetryMax: 30 * time.Minute,
 
 		BatchMaxPackets: 256,
-		// Every batch waits one ARQ round trip (measured srtt 312-424 ms on the
-		// stand), so the bytes per batch are the throughput: 22 KB per round trip
-		// capped a download at 40-83 KB/s while the rooms themselves were idle.
-		// 48 KB is the same batch count the other carriers ship with and still
-		// fits the framed piece limit (maxRoomPieceBytes) whole.
+		// Batches do not scale on this carrier: with one ARQ lane, 13-20 KB
+		// arrives per round trip whatever the batch says, and a bigger batch only
+		// adds retransmissions. Measured on the stand (1 MB, medians of repeats):
+		// 8 rooms x 32 KB -> 92.5 KB/s, 8 x 48 KB -> 57.8, 6 x 96 KB -> 61.4,
+		// 8 x 64 KB with 16 KB messages -> 40.0 with 85 retransmits. The lever that
+		// does work is the room count, so the batch goes back to 32 KB.
 		// OPENFLUX_CUPS_BATCH_BYTES overrides it.
-		BatchMaxBytes: cupsEnvInt("OPENFLUX_CUPS_BATCH_BYTES", 48000),
+		BatchMaxBytes: cupsEnvInt("OPENFLUX_CUPS_BATCH_BYTES", 32000),
 		// 8192 байт данных → 2 байта заголовка → ~684 курсора → провод ~34 KB;
 		// проверено: сервер принимает без ошибок. OPENFLUX_CUPS_MAX_MESSAGE
 		// поднимает полезную нагрузку сообщения (сервер принимал ~21 KB).
@@ -145,11 +146,15 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// помещается и режется на сообщения при отправке.
 		MaxPayloadBytes: 65535,
 
-		// Four rooms is what Cups.online hands out per session; more rooms mean
-		// more parallel channels for the same round trip, and the room list is
-		// carried to the client in the URL, so both sides stay in step.
+		// Rooms are the one lever that measurably moves this carrier: each room is
+		// an independent channel and 4 -> 8 rooms took a 1 MB transfer from 50.0
+		// to 92.5 KB/s at a 32 KB batch (6 rooms lands at 73.9 and saturates). The
+		// relay closes rooms when the same list is reused too often (403 on every
+		// room, the client then joins 0 of 8), so a fresh list per series is part
+		// of the procedure. The list travels to the client in the URL, so both
+		// sides stay in step.
 		// OPENFLUX_CUPS_ROOMS overrides it.
-		NumRooms:        cupsEnvInt("OPENFLUX_CUPS_ROOMS", 4),
+		NumRooms:        cupsEnvInt("OPENFLUX_CUPS_ROOMS", 8),
 		RoomCreatePause: 500 * time.Millisecond,
 
 		StatsInterval: 5 * time.Second,
