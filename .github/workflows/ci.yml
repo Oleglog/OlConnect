@@ -83,7 +83,7 @@ jobs:
           key: ${{ steps.mobilecore-cache.outputs.cache-primary-key }}
 
       - name: Run JVM unit tests
-        run: ./gradlew --no-daemon --build-cache :app:testDebugUnitTest
+        run: ./gradlew --no-daemon --build-cache --init-script scripts/jvm-unit-tests.init.gradle.kts :app:testDebugUnitTest
 
       - name: Upload unit test report
         if: always()
