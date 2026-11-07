@@ -152,7 +152,7 @@ internal class CaptchaActivity : ComponentActivity() {
             MaterialButton(this).apply {
                 setText(R.string.captcha_reload)
                 backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
-                setTextColor(resolveColor(com.google.android.material.R.attr.colorPrimary))
+                setTextColor(resolveColor(androidx.appcompat.R.attr.colorPrimary))
                 setOnClickListener { view.reload() }
             },
         )
