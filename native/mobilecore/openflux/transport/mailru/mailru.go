@@ -274,6 +274,15 @@ type MailruDocsTransport struct {
 	// all of them, the old reader would re-deliver our own egress as ingress.
 	ourIDs sync.Map
 
+	// frameDedup drops a payload that arrives twice within a few hundred
+	// milliseconds. During a make-before-break rotation both carrier
+	// connections receive every broadcast, so without it the peer gets each
+	// packet twice — measured on 2026-11-07: the exit saw 2.2x more packets
+	// than the client sent, and the duplicate SYNs it produced confused the
+	// TCP handshake. The window is deliberately short: a legitimate TCP
+	// retransmission arrives after an RTO of a second or more and must pass.
+	frameDedup *frameDedup
+
 	// authedConn counts carrier connections whose auth the server accepted.
 	// hasCookies is set by ApplyCookies: comparing the 4004-kick budget
 	// (sentCount at kick time, logged in handleMessage) between anonymous and
@@ -300,6 +309,49 @@ const mailruRecvQueue = 256
 // NewMailruDocsTransport accepts either a bare weblink ("AbCdEfGh1/IjKlMnOp2")
 // or a full public URL ("https://cloud.mail.ru/public/AbCdEfGh1/IjKlMnOp2"),
 // normalizing the latter to the former.
+
+// frameDedup remembers payloads seen in the last few hundred milliseconds so a
+// broadcast delivered by two overlapping carrier connections is accepted once.
+type frameDedup struct {
+	mu   sync.Mutex
+	seen map[uint64]time.Time
+	ttl  time.Duration
+}
+
+func newFrameDedup(ttl time.Duration) *frameDedup {
+	return &frameDedup{seen: make(map[uint64]time.Time), ttl: ttl}
+}
+
+// accept reports whether the payload is new, recording it either way.
+func (d *frameDedup) accept(pkt []byte) bool {
+	if d == nil {
+		return true
+	}
+	var h uint64 = 1469598103934665603
+	for _, b := range pkt {
+		h ^= uint64(b)
+		h *= 1099511628211
+	}
+	now := time.Now()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if at, ok := d.seen[h]; ok && now.Sub(at) < d.ttl {
+		return false
+	}
+	if len(d.seen) > 512 {
+		for k, at := range d.seen {
+			if now.Sub(at) >= d.ttl {
+				delete(d.seen, k)
+			}
+		}
+		if len(d.seen) > 4096 {
+			d.seen = make(map[uint64]time.Time)
+		}
+	}
+	d.seen[h] = now
+	return true
+}
+
 func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *MailruDocsTransport {
 	t := &MailruDocsTransport{
 		BaseTransport: transport.NewBaseTransport(config),
@@ -352,6 +404,7 @@ func (t *MailruDocsTransport) Start() error {
 	// Drain received tunnel packets off the read goroutine so a slow downstream
 	// never blocks the reader (and thus the Engine.IO pong). See recvCh.
 	t.recvCh = make(chan []byte, mailruRecvQueue)
+	t.frameDedup = newFrameDedup(250 * time.Millisecond)
 	utils.SafeGo("mailru.recv", func() {
 		for {
 			select {
@@ -1075,6 +1128,9 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	// during a rotation (both connections see every broadcast).
 	if strings.Contains(text, `"messages"`) && session.active.Load() {
 		for _, pkt := range decodeChatDataFilter(data, t.baseUserID, t.isOwnID) {
+			if !t.frameDedup.accept(pkt) {
+				continue
+			}
 			t.RecordReceive(len(pkt))
 			// Never block the reader: a full queue means downstream is behind,
 			// so drop (the Session's ARQ retransmits) and keep reading so the
