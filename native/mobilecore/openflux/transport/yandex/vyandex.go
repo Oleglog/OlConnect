@@ -63,6 +63,14 @@ type VolgaConfig struct {
 }
 
 func DefaultVolgaConfig() VolgaConfig {
+	// Batching is the only lever on page latency for this carrier: every batch
+	// is one HTTP round trip to the Volga relay, which meters requests and
+	// answers 429 when they come too fast. The knobs stay readable from the
+	// environment so the stand can A/B them without a rebuild; on Android they
+	// simply fall back to the field values.
+	batchSize := envIntDefault("OPENFLUX_VOLGA_BATCH", 10)
+	batchTimeout := time.Duration(envIntDefault("OPENFLUX_VOLGA_BATCH_TIMEOUT_MS", 20)) * time.Millisecond
+	batchMaxBytes := envIntDefault("OPENFLUX_VOLGA_BATCH_BYTES", 24*1024)
 	return VolgaConfig{
 		MaxIdleConnsPerHost: 2000,
 		MaxIdleConns:        4000,
@@ -72,9 +80,9 @@ func DefaultVolgaConfig() VolgaConfig {
 		WorkerCount: 1,
 		QueueSize:   1000000,
 
-		BatchSize:         10,
-		BatchTimeout:      20 * time.Millisecond,
-		BatchMaxBytes:     24 * 1024,
+		BatchSize:         batchSize,
+		BatchTimeout:      batchTimeout,
+		BatchMaxBytes:     batchMaxBytes,
 		RequestInterval:   20 * time.Millisecond,
 		RateLimitMaxDelay: 5 * time.Second,
 
