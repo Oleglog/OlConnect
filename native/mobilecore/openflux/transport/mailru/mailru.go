@@ -444,17 +444,35 @@ func (t *MailruDocsTransport) Start() error {
 }
 
 // mailruPreferredBatchBytes is the default coalescing batch size for the chat
-// carrier. The R7 server cuts an anonymous editor connection with 4004 after
-// ~12 chat messages regardless of their size, so a large batch fits far more
-// tunnel data into that fixed message budget before the reconnect. Measured
-// end-to-end (d14 exit <-> 212 client, cachefly 10 MB via socks5h): the 8 KB
-// default gave the old tens-of-KB/s; ~500 KB reaches ~860 KB/s per burst, while
-// 1 MB is slower and far more variable (a bigger loss unit per 4004 cut).
-// OPENFLUX_BATCH_BYTES overrides this (see transport.BatchSizeHinter).
-const mailruPreferredBatchBytes = 500_000
+// carrier. The R7 server cuts a connection with 4004 after ~25 chat messages
+// regardless of their size, so a large batch fits far more tunnel data into
+// that fixed message budget. Measured on 2026-11-07 against a live document
+// (Windows client and Linux exit on separate hosts, downloads through socks5h):
+//
+//	500 KB batches — large transfers wedge: 1 MB stalled at ~220 KB
+//	60 KB batches  — fast for pages (100 KB in 1.8 s), 1 MB stalled at 728 KB
+//	32 KB batches  — 100 KB in 1.4 s, furthest progress on 1 MB
+//	16 KB batches  — 1 MB completes, but throughput halves (21 KB/s)
+//
+// A chat message is base64 (+33%) inside a JSON text frame, so 32 KB of tunnel
+// payload stays under the frame size the server accepts while still carrying
+// ~20 segments per message — which is what makes the ~25-message budget last
+// over real traffic. OPENFLUX_BATCH_BYTES overrides this (see
+// transport.BatchSizeHinter).
+const mailruPreferredBatchBytes = 32_000
 
 // PreferredBatchBytes implements transport.BatchSizeHinter.
 func (t *MailruDocsTransport) PreferredBatchBytes() int { return mailruPreferredBatchBytes }
+
+// mailruPreferredBatchLingerMs widens the coalescing window: the budget the
+// carrier meters is messages, not bytes, and the 5 ms global default collects
+// one or two segments at browsing rates. Measured: 25 ms cut a 145 KB news page
+// from 17.5 s to 11.6 s and ya.ru from 2.8 s to 1.5 s, with no kicks.
+// OPENFLUX_BATCH_LINGER_MS overrides it (see transport.BatchLingerHinter).
+const mailruPreferredBatchLingerMs = 25
+
+// PreferredBatchLingerMs implements transport.BatchLingerHinter.
+func (t *MailruDocsTransport) PreferredBatchLingerMs() int { return mailruPreferredBatchLingerMs }
 
 // defaultMailruMsgIntervalMs is the minimum gap between chat writes on one
 // carrier connection. Pacing stays: without it the client's write queue bursts
@@ -463,8 +481,14 @@ func (t *MailruDocsTransport) PreferredBatchBytes() int { return mailruPreferred
 // removed. 500 ms (2/s) keeps the burst flat; the price is latency, and the
 // separate time-based rotation that used to push the round trip to 1.6-3 s is
 // gone (see defaultMailruRotateMs).
+//
+// 150 ms (6.7/s) is the measured sweet spot once rotation is frame-count
+// driven and the batch carries 32 KB: a 577-byte page went 1.2 s -> 0.3 s and
+// ya.ru 7.0 s -> 1.5 s against 500 ms, with zero 4004 kicks because each
+// connection still rotates after ~20 frames. The old 500 ms was a workaround
+// for small batches drowning in per-message pacing.
 // OPENFLUX_MAILRU_MSG_INTERVAL_MS overrides it; 0 disables pacing.
-const defaultMailruMsgIntervalMs = 500
+const defaultMailruMsgIntervalMs = 150
 
 var mailruMsgInterval = func() time.Duration {
 	n := defaultMailruMsgIntervalMs

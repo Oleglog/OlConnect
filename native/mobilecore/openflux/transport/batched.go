@@ -68,6 +68,15 @@ type BatchSizeHinter interface {
 	PreferredBatchBytes() int
 }
 
+// BatchLingerHinter is optionally implemented by inner transports that need a
+// wider coalescing window than the global 5 ms default. A chat carrier that
+// spends a fixed budget of messages per connection (Mail.ru: ~25 before the
+// 4004 kick) has to put many segments into each message, and at browsing rates
+// 5 ms collects one or two. OPENFLUX_BATCH_LINGER_MS still overrides the hint.
+type BatchLingerHinter interface {
+	PreferredBatchLingerMs() int
+}
+
 func NewBatchedTransport(inner Transport) *BatchedTransport {
 	maxBytes := envInt("OPENFLUX_BATCH_BYTES", 0)
 	if maxBytes <= 0 {
@@ -77,11 +86,19 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 			maxBytes = defaultMaxBatchBytes
 		}
 	}
+	linger := envInt("OPENFLUX_BATCH_LINGER_MS", 0)
+	if linger <= 0 {
+		if hinter, ok := inner.(BatchLingerHinter); ok && hinter.PreferredBatchLingerMs() > 0 {
+			linger = hinter.PreferredBatchLingerMs()
+		} else {
+			linger = defaultLingerMs
+		}
+	}
 	return &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
 		ctrl:          make(chan []byte, ctrlQueueDepth),
-		lingerMs:      envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
+		lingerMs:      linger,
 		maxBatchBytes: maxBytes,
 		maxBatchCount: envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount),
 	}
