@@ -308,6 +308,16 @@ type MailruDocsTransport struct {
 	// attempts, because each fresh socket starts with the bucket already
 	// drained by the previous burst. A pause lets the bucket refill.
 	kickCooldownUntil atomic.Int64
+
+	// rateLimitUntil (UnixNano) delays the next dial after the carrier answered
+	// a WebSocket upgrade with 429. Mail.ru meters how often one account may
+	// open connections: a rotation dialled every few seconds starts coming back
+	// as "websocket dial (http 429)", the rotation then fails, the old
+	// connection is kicked on its frame budget, and the tunnel stalls for the
+	// whole reconnect. Waiting out the limit instead of hammering it is what
+	// keeps the carrier usable; rateLimitHits is logged so the stand can see it.
+	rateLimitUntil atomic.Int64
+	rateLimitHits  atomic.Int64
 }
 
 // mailruRecvQueue bounds the decoupling receive buffer (whole batches, so kept
@@ -525,10 +535,20 @@ const mailruRotateAuthWait = 8 * time.Second
 
 // defaultMailruRotateMsgs rotates the carrier make-before-break once this many
 // chat frames have been written on it. The carrier cuts a connection after
-// ~25 frames (measured: kick at sent=25, age 8 s), so 20 leaves a margin and
-// still keeps the connection alive long enough to be worth a handshake.
-// OPENFLUX_MAILRU_ROTATE_MSGS overrides it.
-const defaultMailruRotateMsgs = 20
+// 22-34 frames regardless of pacing (measured 2026-11-07 over 22 harness runs),
+// and a rotation only prevents that cut when
+//
+//	rotateMsgs + auth_frames < 22,  auth_frames = auth_time(~0.5-1.5s)/interval
+//
+// so the count has to leave room for the dial to land. Measured at 150 ms
+// pacing: rotate 20 -> 27 frames before the new carrier is up, 10 kicks in one
+// run and a dead tunnel after each; rotate 8 -> 17 frames worst case, 0 kicks
+// in two runs, 1 MB completed (54 s and 79 s), ya.ru 4.7 s. At 300 ms rotate 8
+// also gave 0 kicks; 500/20 was stable but slower (ya.ru 7-8.5 s).
+// OPENFLUX_MAILRU_ROTATE_MSGS overrides it; 0 disables pre-emptive rotation and
+// measured as the worst setting — the connection is always kicked and the
+// tunnel then sits dead for 8-22 s.
+const defaultMailruRotateMsgs = 8
 
 var mailruRotateMsgs = func() int64 {
 	n := int64(defaultMailruRotateMsgs)
@@ -650,6 +670,16 @@ func (t *MailruDocsTransport) dialAndAuth(userID string, writeQueue chan []byte)
 		status := 0
 		if resp != nil {
 			status = resp.StatusCode
+		}
+		if status == http.StatusTooManyRequests {
+			// The carrier meters connection opens per account. Back off for
+			// longer than the ordinary retry ladder would, and say so: without
+			// this the rotation keeps dialling into the limit, the old
+			// connection is kicked, and the tunnel sits dead for every retry.
+			wait := mailruRateLimitWait()
+			t.rateLimitUntil.Store(time.Now().Add(wait).UnixNano())
+			n := t.rateLimitHits.Add(1)
+			utils.Infof("[M-DOCS] dial rate-limited (http 429, hit #%d): waiting %v before the next attempt", n, wait.Round(time.Millisecond))
 		}
 		return nil, fmt.Errorf("websocket dial (http %d): %w", status, err)
 	}
@@ -1311,6 +1341,13 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 			d = wait
 		}
 	}
+	// A 429 means the account is being metered on connection opens: hammering it
+	// costs us the carrier, so its wait wins over the ordinary backoff too.
+	if until := t.rateLimitUntil.Load(); until != 0 {
+		if wait := time.Until(time.Unix(0, until)); wait > d {
+			d = wait
+		}
+	}
 	utils.Debugf("[M-DOCS] reconnecting in %v (attempt %d)", d, next)
 	time.Sleep(d)
 	t.reconnecting.Store(false) // a failed connect schedules the next one itself
@@ -1330,6 +1367,17 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 // budget the kick already drained; it made no observable difference in the
 // field, and a 30s dead window is a real cost when the kick was spurious.
 const mailruKickCooldown = 0 * time.Second
+
+// mailruRateLimitBackoff is how long the transport waits after the carrier
+// answers a WebSocket upgrade with 429 (Too Many Requests). Mail.ru meters how
+// often one account may open connections; a rotation dialled every few seconds
+// lands in that meter. Ten seconds plus jitter is long enough to sit the window
+// out and short enough that the tunnel does not look dead.
+const mailruRateLimitBackoff = 10 * time.Second
+
+func mailruRateLimitWait() time.Duration {
+	return mailruRateLimitBackoff + time.Duration(rand.Int63n(int64(mailruRateLimitBackoff/2)+1))
+}
 
 // reconnectBackoff returns an exponential backoff with jitter, capped at 15s.
 func reconnectBackoff(n int) time.Duration {
