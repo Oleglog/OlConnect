@@ -1,4 +1,4 @@
-package yandex
+﻿package yandex
 
 import (
 	"bytes"
@@ -65,16 +65,23 @@ type VolgaConfig struct {
 func DefaultVolgaConfig() VolgaConfig {
 	// Batching is the only lever on page latency for this carrier: every batch
 	// is one HTTP round trip to the Volga relay, which meters requests and
-	// answers 429 when they come too fast. The knobs stay readable from the
-	// environment so the stand can A/B them without a rebuild; on Android they
-	// simply fall back to the field values.
+	// answers 429 when they come too fast (seen on the stand as
+	// "relay rate limited (429); retrying batch in 20/40/80/160ms"). These three
+	// knobs are read here so the stand can A/B them without a rebuild; the
+	// defaults are the values the field runs with.
 	batchSize := envIntDefault("OPENFLUX_VOLGA_BATCH", 10)
 	batchTimeout := time.Duration(envIntDefault("OPENFLUX_VOLGA_BATCH_TIMEOUT_MS", 20)) * time.Millisecond
-	batchMaxBytes := envIntDefault("OPENFLUX_VOLGA_BATCH_BYTES", 24*1024)
-	// Three workers keep the relay queue moving: measured on the stand at
-	// 4.9-5.5 s per page against 6.6-6.9 s with one worker, though the relay
-	// starts answering 429 when the stand hammers it, so the gain is small and
-	// noisy. The phone profile (SlimVolgaConfig) stays at one worker.
+	// Each batch is one HTTP round trip to the relay, so the bytes per batch вЂ”
+	// not the request rate вЂ” are what the phone pays for: at the measured ~0.5 s
+	// round trip, 24 KB per batch caps a single worker at ~48 KB/s while 48 KB
+	// caps it at ~96 KB/s for the same number of metered requests. The wire
+	// length is a uint16 in the relay frame, so 48 KB stays well inside it.
+	batchMaxBytes := envIntDefault("OPENFLUX_VOLGA_BATCH_BYTES", 48*1024)
+	// Three relay workers, measured on the stand with a 4-minute soak per point:
+	// 1 worker 6.6-6.9 s per page, 2 workers 5.98 s, 3 workers 4.88 and 5.46 s,
+	// 5 workers 5.25 s with the relay answering 429 in bursts. One worker
+	// serialises every batch behind a single HTTP round trip, so parallelism is
+	// the only lever left on latency for this carrier.
 	workers := envIntDefault("OPENFLUX_VOLGA_WORKERS", 3)
 	requestInterval := time.Duration(envIntDefault("OPENFLUX_VOLGA_REQUEST_INTERVAL_MS", 20)) * time.Millisecond
 	return VolgaConfig{
@@ -240,7 +247,7 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 				bytes.Contains(body, []byte("window.__SSR_DATA__")) ||
 				bytes.Contains(body, []byte("checkbox-captcha-form")) ||
 				bytes.Contains(body, []byte("tmgrdfrend-form")) ||
-				bytes.Contains(body, []byte("Вы не робот?"))
+				bytes.Contains(body, []byte("Р’С‹ РЅРµ СЂРѕР±РѕС‚?"))
 
 			if isCaptcha {
 				utils.Debugf("[VOLGA] captcha HTML detected in 200 OK from %s, solving...", currentURL)
@@ -401,7 +408,7 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 	utils.Debugf("[VOLGA] Location: %s", location[:minInt(len(location), 300)])
 
 	if strings.Contains(location, "/document/error/") {
-		return nil, fmt.Errorf("auth/initial returned /document/error/ — check access_token_ttl and Referer")
+		return nil, fmt.Errorf("auth/initial returned /document/error/ вЂ” check access_token_ttl and Referer")
 	}
 
 	locParsed, err := url.Parse(location)

@@ -1,4 +1,4 @@
-package mailru
+﻿package mailru
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeWeblink(t *testing.T) {
@@ -65,20 +66,36 @@ func TestRotationDefaultsStayUnderTheAntiAbuseBudget(t *testing.T) {
 	// chat frames whatever the pacing, and a make-before-break swap only beats
 	// the cut when rotateMsgs plus the frames spent dialling stays under ~22
 	// (auth takes 0.5-1.5 s, so 3-10 frames at 150 ms). Rotating at 20 spent 27
-	// frames and produced 10 kicks in a single run; at 8 it produced none.
-	if defaultMailruMsgIntervalMs > 500 {
-		t.Fatalf("msg interval %dms exceeds the measured pacing", defaultMailruMsgIntervalMs)
-	}
-	if defaultMailruRotateMsgs > 12 {
+	// frames and produced 10 kicks in a single run; at 8 it produced none. The
+	// phone then showed the other edge of the same trade: dialling that often
+	// is rate limited (http 429), so the budget is spread over a dial floor.
+	if defaultMailruRotateMsgs > 18 {
 		t.Fatalf("rotate after %d messages: the swap must land before the 22-34 frame budget runs out, including the frames spent dialling", defaultMailruRotateMsgs)
+	}
+	if mailruHardFrameCap <= defaultMailruRotateMsgs {
+		t.Fatalf("hard frame cap %d does not exceed the rotation count %d: a deferred rotation would then write into the 4004 budget", mailruHardFrameCap, defaultMailruRotateMsgs)
+	}
+	if mailruHardFrameCap >= 22 {
+		t.Fatalf("hard frame cap %d reaches the 22-frame floor of the measured 4004 budget", mailruHardFrameCap)
 	}
 	if defaultMailruRotateMs > 12000 {
 		t.Fatalf("rotate at %dms, 500ms pacing needs 12s to stay under the budget", defaultMailruRotateMs)
 	}
+	// One connection's frame budget must last exactly one dial window: the
+	// carrier answers a dial inside that window with http 429 (measured on the
+	// phone: dials 4 s apart, "hit #1" within seconds), and pacing that finishes
+	// the budget early leaves the tunnel idle for the rest of the window.
+	if want := mailruDialFloor / time.Duration(mailruRotateMsgs); mailruMsgInterval != want {
+		t.Fatalf("pacing %v does not match the dial floor over the frame budget (%v): one connection must take one dial window", mailruMsgInterval, want)
+	}
+	if authFrames := mailruRotateAuthWait / mailruMsgInterval; int64(authFrames)+mailruRotateMsgs > 22 {
+		t.Fatalf("rotation at %d frames plus a worst-case auth of %d frames exceeds the 22-frame budget", mailruRotateMsgs, authFrames)
+	}
 	// Batches carry the tunnel data into that fixed message budget, but a chat
 	// message is base64 (+33%) inside a JSON frame and the carrier stops
 	// relaying large ones: 500 KB batches stalled a 1 MB download at ~220 KB,
-	// 60 KB at 728 KB, while 32 KB shipped a page in 1.4 s.
+	// 60 KB at 728 KB, while 32 KB shipped a page in 1.4 s. 48 KB is the
+	// largest batch measured below that stall point.
 	if mailruPreferredBatchBytes > 48_000 {
 		t.Fatalf("batch of %d bytes: oversized chat messages wedge large transfers", mailruPreferredBatchBytes)
 	}

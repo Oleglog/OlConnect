@@ -1,4 +1,4 @@
-package yandex
+﻿package yandex
 
 import (
 	"io"
@@ -15,10 +15,18 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-func TestDefaultVolgaConfigUsesOneBatcherAndWireSafeFrames(t *testing.T) {
+// TestDefaultVolgaConfigPinsTheMeasuredStandValues keeps the default profile on
+// the numbers the stand was soaked with: three relay workers beat one (6.6-6.9 s
+// per page with a single serialised round trip, 4.88-5.46 s with three), five
+// already drew 429 bursts, and a batch must carry enough bytes that the relay's
+// metered request rate is not the throughput ceiling.
+func TestDefaultVolgaConfigPinsTheMeasuredStandValues(t *testing.T) {
 	cfg := DefaultVolgaConfig()
-	if cfg.WorkerCount != 1 {
-		t.Fatalf("WorkerCount = %d, want 1", cfg.WorkerCount)
+	if cfg.WorkerCount != 3 {
+		t.Fatalf("WorkerCount = %d, want 3: two and five workers both measured worse on the stand", cfg.WorkerCount)
+	}
+	if cfg.BatchMaxBytes < 48*1024 {
+		t.Fatalf("BatchMaxBytes = %d, want at least 48 KB: each batch is one metered round trip", cfg.BatchMaxBytes)
 	}
 	if got := (&YandexVolgaTransport{}).PreferredBatchBytes(); got > (1<<16)-1 {
 		t.Fatalf("PreferredBatchBytes = %d, exceeds uint16 wire length", got)
