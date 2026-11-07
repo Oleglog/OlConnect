@@ -71,19 +71,25 @@ func DefaultVolgaConfig() VolgaConfig {
 	batchSize := envIntDefault("OPENFLUX_VOLGA_BATCH", 10)
 	batchTimeout := time.Duration(envIntDefault("OPENFLUX_VOLGA_BATCH_TIMEOUT_MS", 20)) * time.Millisecond
 	batchMaxBytes := envIntDefault("OPENFLUX_VOLGA_BATCH_BYTES", 24*1024)
+	// Three workers keep the relay queue moving: measured on the stand at
+	// 4.9-5.5 s per page against 6.6-6.9 s with one worker, though the relay
+	// starts answering 429 when the stand hammers it, so the gain is small and
+	// noisy. The phone profile (SlimVolgaConfig) stays at one worker.
+	workers := envIntDefault("OPENFLUX_VOLGA_WORKERS", 3)
+	requestInterval := time.Duration(envIntDefault("OPENFLUX_VOLGA_REQUEST_INTERVAL_MS", 20)) * time.Millisecond
 	return VolgaConfig{
 		MaxIdleConnsPerHost: 2000,
 		MaxIdleConns:        4000,
 		IdleConnTimeout:     90 * time.Second,
 		RelayTimeout:        30 * time.Second,
 
-		WorkerCount: 1,
+		WorkerCount: workers,
 		QueueSize:   1000000,
 
 		BatchSize:         batchSize,
 		BatchTimeout:      batchTimeout,
 		BatchMaxBytes:     batchMaxBytes,
-		RequestInterval:   20 * time.Millisecond,
+		RequestInterval:   requestInterval,
 		RateLimitMaxDelay: 5 * time.Second,
 
 		MaxPayloadBytes: (1 << 16) - 1,
