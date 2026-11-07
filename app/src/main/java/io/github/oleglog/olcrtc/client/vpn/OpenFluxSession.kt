@@ -198,18 +198,8 @@ internal class OpenFluxSession(
         }
     }
 
-    private val injectTrace = java.util.concurrent.atomic.AtomicInteger(0)
-
     private fun inject(output: FileOutputStream, packet: ByteArray) {
         if (closed.get()) return
-        // TEMP DIAGNOSTIC (v1.7.27): the carrier delivers ~2 packets/s but the
-        // stack never ACKs, so dump the first few inbound headers to see what
-        // actually lands on the TUN.
-        if (injectTrace.get() < 300) {
-            val n = injectTrace.incrementAndGet()
-            val hex = if (n <= 6) " hex=" + packet.joinToString("") { Integer.toHexString(it.toInt() and 0xff).padStart(2, '0') } else ""
-            runCatching { onLog("inbound#$n ${describePacket(packet)}$hex") }
-        }
         synchronized(outputLock) {
             if (!closed.get()) {
                 runCatching {
@@ -218,73 +208,6 @@ internal class OpenFluxSession(
                 }
             }
         }
-        // TEMP DIAGNOSTIC (v1.7.30): a SYN-ACK written to the TUN never turns the
-        // socket ESTABLISHED, so ask the kernel directly what state it holds for
-        // the flow after the packet has been injected.
-        if (isTcpSynAck(packet) && synAckBudget.getAndIncrement() < 20) {
-            val port = dstPortOf(packet)
-            if (port > 0) {
-                executeWorker {
-                    Thread.sleep(60)
-                    kernelStateFor(port)?.let { onLog("kernel state for port $port: $it") }
-                }
-            }
-        }
-    }
-
-    private val synAckBudget = java.util.concurrent.atomic.AtomicInteger(0)
-
-    private fun isTcpSynAck(p: ByteArray): Boolean {
-        if (p.size < 20) return false
-        if (p[9].toInt() and 0xff != 6) return false
-        val ihl = (p[0].toInt() and 0x0f) * 4
-        if (p.size < ihl + 14) return false
-        return (p[ihl + 13].toInt() and 0x12) == 0x12
-    }
-
-    private fun dstPortOf(p: ByteArray): Int {
-        val ihl = (p[0].toInt() and 0x0f) * 4
-        if (p.size < ihl + 4) return 0
-        return ((p[ihl + 2].toInt() and 0xff) shl 8) or (p[ihl + 3].toInt() and 0xff)
-    }
-
-    /** Looks the flow up in /proc/net/tcp{,6} and returns "state=XX rem=..." for it. */
-    private fun kernelStateFor(port: Int): String? {
-        for (path in listOf("/proc/net/tcp", "/proc/net/tcp6")) {
-            val file = java.io.File(path)
-            if (!file.canRead()) return null
-            runCatching {
-                file.useLines { lines ->
-                    for (line in lines.drop(1)) {
-                        val cols = line.trim().split(Regex("\\s+"))
-                        if (cols.size < 4) continue
-                        val local = cols[1]
-                        val localPort = local.substringAfterLast(':').toIntOrNull(16) ?: continue
-                        if (localPort != port) continue
-                        return "file=$path state=${cols[3]} rem=${cols[2]}"
-                    }
-                }
-            }
-        }
-        return null
-    }
-
-    private fun describePacket(p: ByteArray): String {
-        if (p.size < 20) return "short len=${p.size}"
-        val ihl = (p[0].toInt() and 0x0f) * 4
-        if (p.size < ihl + 4) return "short ihl len=${p.size}"
-        val proto = p[9].toInt() and 0xff
-        fun b(i: Int) = (p[i].toInt() and 0xff).toString()
-        val src = "${b(12)}.${b(13)}.${b(14)}.${b(15)}"
-        val dst = "${b(16)}.${b(17)}.${b(18)}.${b(19)}"
-        val sp = ((p[ihl].toInt() and 0xff) shl 8) or (p[ihl + 1].toInt() and 0xff)
-        val dp = ((p[ihl + 2].toInt() and 0xff) shl 8) or (p[ihl + 3].toInt() and 0xff)
-        val flags = if (proto == 6 && p.size >= ihl + 14) {
-            Integer.toHexString(p[ihl + 13].toInt() and 0xff)
-        } else {
-            "-"
-        }
-        return "proto=$proto $src:$sp->$dst:$dp flags=$flags len=${p.size}"
     }
 
     override fun close() {
