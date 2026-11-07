@@ -23,6 +23,25 @@ jobs:
           cache: true
           cache-dependency-path: native/mobilecore/go.sum
       - run: go mod tidy
+      # The vp8channel receive path lives in the embedded olcrtc core, so a stale
+      # pin means every server-side carrier fix silently skips the phone. That is
+      # exactly what happened on 2026-11-07: the pin sat at a two-day-old commit,
+      # the server carried data and the APK kept failing with the old symptoms.
+      - name: Embedded olcrtc core is recent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pin=$(grep -m1 '^replace github.com/openlibrecommunity/olcrtc' go.mod | awk '{print $NF}')
+          sha=${pin##*-}
+          echo "pinned embed: $pin (commit $sha)"
+          committed=$(gh api "repos/Oleglog/Olcrtc_manager/commits/$sha" --jq '.commit.committer.date')
+          echo "pinned commit date: $committed"
+          age=$(( ( $(date -u +%s) - $(date -u -d "$committed" +%s) ) / 86400 ))
+          echo "pin age: $age days"
+          if [ "$age" -gt 7 ]; then
+            echo "::error::The embedded olcrtc core is $age days old; server-side transport fixes do not reach the phone until this pin is bumped (now $pin). Update the replace in native/mobilecore/go.mod."
+            exit 1
+          fi
       - run: go test ./...
 
   android-unit-tests:

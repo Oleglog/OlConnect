@@ -61,16 +61,32 @@ func TestV2ChatFramesDistinguishEndpointsOnSameAccount(t *testing.T) {
 // v1.0.18 ("unthrottle") and the carrier then got cut 13-36 s into every
 // connection, authenticated sessions included.
 func TestRotationDefaultsStayUnderTheAntiAbuseBudget(t *testing.T) {
-	// Field measurement 2026-11-07: a connection survives ~25-40 chat frames,
-	// so pacing and rotation must spend fewer than that between swaps.
+	// Measured 2026-11-07 over 22 harness runs: a connection survives 22-34
+	// chat frames whatever the pacing, and a make-before-break swap only beats
+	// the cut when rotateMsgs plus the frames spent dialling stays under ~22
+	// (auth takes 0.5-1.5 s, so 3-10 frames at 150 ms). Rotating at 20 spent 27
+	// frames and produced 10 kicks in a single run; at 8 it produced none.
 	if defaultMailruMsgIntervalMs > 500 {
 		t.Fatalf("msg interval %dms exceeds the measured pacing", defaultMailruMsgIntervalMs)
 	}
-	if defaultMailruRotateMsgs > 40 {
-		t.Fatalf("rotate after %d messages, the measured budget is ~25-40 per connection", defaultMailruRotateMsgs)
+	if defaultMailruRotateMsgs > 12 {
+		t.Fatalf("rotate after %d messages: the swap must land before the 22-34 frame budget runs out, including the frames spent dialling", defaultMailruRotateMsgs)
 	}
 	if defaultMailruRotateMs > 12000 {
 		t.Fatalf("rotate at %dms, 500ms pacing needs 12s to stay under the budget", defaultMailruRotateMs)
+	}
+	// Batches carry the tunnel data into that fixed message budget, but a chat
+	// message is base64 (+33%) inside a JSON frame and the carrier stops
+	// relaying large ones: 500 KB batches stalled a 1 MB download at ~220 KB,
+	// 60 KB at 728 KB, while 32 KB shipped a page in 1.4 s.
+	if mailruPreferredBatchBytes > 48_000 {
+		t.Fatalf("batch of %d bytes: oversized chat messages wedge large transfers", mailruPreferredBatchBytes)
+	}
+	if mailruPreferredBatchBytes < 8_000 {
+		t.Fatalf("batch of %d bytes: a segment per message drowns in per-message pacing", mailruPreferredBatchBytes)
+	}
+	if mailruPreferredBatchLingerMs < 5 {
+		t.Fatalf("batch linger %dms: the 5 ms global default collects one or two segments at browsing rates", mailruPreferredBatchLingerMs)
 	}
 }
 
