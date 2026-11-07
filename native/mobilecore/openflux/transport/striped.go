@@ -87,6 +87,19 @@ const maxStripeLanes = 64
 // health deadline. The caller should restart the process.
 var ErrAllLanesDead = fmt.Errorf("stripe: all lanes dead")
 
+// fatalOnAllLanesDead makes the stripe terminate the process once it has given
+// up. Without it Stop() only silences the transport and the daemon keeps
+// running with no path to the SFU: instance 8 sat like that for hours, healthy
+// from systemd's point of view and carrying nothing. Only the standalone CLI
+// turns it on — the mobile client must not, because exiting there would kill
+// the app process.
+var fatalOnAllLanesDead atomic.Bool
+
+// ExitOnAllLanesDead enables terminating the process when every lane has been
+// down past the health deadline, so a supervisor (systemd Restart=on-failure)
+// brings the node back.
+func ExitOnAllLanesDead(on bool) { fatalOnAllLanesDead.Store(on) }
+
 // SetHealthDeadline sets how long every lane may stay down before the stripe
 // stops itself. Zero disables the check.
 func (s *StripedTransport) SetHealthDeadline(d time.Duration) {
@@ -623,6 +636,13 @@ func (s *StripedTransport) statsLoop() {
 			utils.Infof("[STRIPE] all %d lanes dead past %s, stopping: %v",
 				len(lanes), s.healthDeadline, ErrAllLanesDead)
 			_ = s.Stop()
+			if fatalOnAllLanesDead.Load() {
+				// Hand the node back to its supervisor: a process that keeps
+				// running with no lane looks healthy and carries nothing. The
+				// mobile client never enables this (see ExitOnAllLanesDead).
+				utils.Errorf("[STRIPE] exiting so the supervisor restarts the node")
+				os.Exit(1)
+			}
 			return
 		}
 		d, sk, late, buffered, gaps := s.ro.snapshot()
