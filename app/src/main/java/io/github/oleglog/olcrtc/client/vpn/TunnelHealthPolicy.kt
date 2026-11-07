@@ -26,7 +26,7 @@ internal object TunnelHealthPolicy {
     const val TUNNEL_HEALTH_TIMEOUT_MILLIS = 30_000
 
     /** Timeout for one blocking datapath probe during startup. */
-    const val DATAPATH_TIMEOUT_MILLIS = 10_000
+    const val DATAPATH_TIMEOUT_MILLIS = 30_000
 
     /**
      * Startup datapath probes before giving up. A single DNS datagram can be
@@ -34,7 +34,7 @@ internal object TunnelHealthPolicy {
      * missed query is not proof the tunnel is dead — but every retry sends a
      * new query, which a longer single timeout would not do.
      */
-    const val DATAPATH_ATTEMPTS = 3
+    const val DATAPATH_ATTEMPTS = 5
 
     /** Pause between startup datapath probes. */
     const val DATAPATH_RETRY_PAUSE_MILLIS = 500L

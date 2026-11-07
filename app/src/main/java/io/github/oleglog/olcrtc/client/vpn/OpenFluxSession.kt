@@ -221,7 +221,7 @@ internal class OpenFluxSession(
         // TEMP DIAGNOSTIC (v1.7.30): a SYN-ACK written to the TUN never turns the
         // socket ESTABLISHED, so ask the kernel directly what state it holds for
         // the flow after the packet has been injected.
-        if (synAckBudget.getAndIncrement() < 20 && isTcpSynAck(packet)) {
+        if (isTcpSynAck(packet) && synAckBudget.getAndIncrement() < 20) {
             val port = dstPortOf(packet)
             if (port > 0) {
                 executeWorker {

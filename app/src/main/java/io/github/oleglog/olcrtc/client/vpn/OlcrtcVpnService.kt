@@ -1259,15 +1259,15 @@ class OlcrtcVpnService : VpnService() {
             return true
         }
 
-        if (packet.size < 20) return false
+        if (packet.size < 20) return deny("short packet")
         val version = packet[0].toInt() ushr 4
-        if (version != 4) return false
+        if (version != 4) return deny("ipv$version")
         val ihl = (packet[0].toInt() and 0x0f) * 4
-        if (packet.size < ihl + 4) return false
+        if (packet.size < ihl + 4) return deny("short packet")
 
         val protocol = packet[9].toInt() and 0xff
         if (protocol != 6 && protocol != 17) {
-            return false
+            return deny("proto=$protocol")
         }
 
         val srcPort = ((packet[ihl].toInt() and 0xff) shl 8) or (packet[ihl + 1].toInt() and 0xff)
@@ -1284,7 +1284,16 @@ class OlcrtcVpnService : VpnService() {
         val ports = (srcPort.toLong() shl 16) or (dstPort.toLong() and 0xffffL)
         val cacheKey = protocol.toLong() * 31L + ports * 37L + srcIpInt * 41L + dstIpInt * 43L
 
-        packetFilterCache.get(cacheKey)?.let { return it }
+        packetFilterCache.get(cacheKey)?.let { cached ->
+            if (!cached) {
+                val now = SystemClock.elapsedRealtime()
+                val last = filterDenyLoggedAt.get()
+                if (now - last >= 1000L && filterDenyLoggedAt.compareAndSet(last, now)) {
+                    diagnostics.append("info", "TUN filter deny (cached): proto=$protocol $srcPort->$dstPort")
+                }
+            }
+            return cached
+        }
 
         val allowed = checkPacketAllowed(protocol, packet, srcPort, dstPort, perAppPolicy, packageRules)
         packetFilterCache.put(cacheKey, allowed)
