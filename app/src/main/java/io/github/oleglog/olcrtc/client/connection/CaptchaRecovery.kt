@@ -59,7 +59,8 @@ internal fun captchaRecoveryPlan(
     config: ProfileConfig?,
     cookies: String?,
 ): CaptchaRecovery? {
-    if (reference.isNullOrBlank()) return null
+    // Nothing new came back, so there is nothing to write and nothing to retry.
+    if (reference.isNullOrBlank() || cookies.isNullOrBlank()) return null
     val openflux = (config as? ProfileConfig.OpenFlux)?.value ?: return null
     if (!isYandexCarrier(openflux.transport.value)) return null
     val merged = mergeCookieHeaders(openflux.cookies, cookies) ?: return null
