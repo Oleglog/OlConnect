@@ -22,6 +22,7 @@ internal object OpenFluxUri {
             "telemost" -> "telemost"
             "cups", "cupsonline" -> "cupsonline"
             "bitrix24", "bitrix" -> "bitrix24"
+            "boards", "board" -> "boards"
             "avito" -> "avito"
             "vyandex" -> "vyandex"
             "yandex" -> "yandex"
@@ -87,6 +88,7 @@ internal object OpenFluxUri {
                 else if (profile.documentUrl.contains("cups.online")) "cupsonline"
                 else if (profile.documentUrl.contains("bitrix24")) "bitrix24"
                 else if (profile.documentUrl.contains("avito.ru")) "avito"
+                else if (profile.documentUrl.contains("boards.yandex.ru")) "boards"
                 else if (profile.documentUrl.contains("/edit/d/")) "vyandex"
                 else "yandex"
             }

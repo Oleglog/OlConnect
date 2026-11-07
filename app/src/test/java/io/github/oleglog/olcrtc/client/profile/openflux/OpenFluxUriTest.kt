@@ -128,6 +128,7 @@ class OpenFluxUriTest {
             OpenFluxProfile.Transport.CUPSONLINE to "https://interview.cups.online/live-coding/12345678-1234-1234-1234-123456789abc",
             OpenFluxProfile.Transport.BITRIX24 to "https://company.bitrix24.ru",
             OpenFluxProfile.Transport.AVITO to "https://www.avito.ru",
+            OpenFluxProfile.Transport.BOARDS to "https://boards.yandex.ru/whiteboard/?hash=ea1fa3fd647db29f766e06212a553539",
         )
         for ((transport, url) in transports) {
             val original = OpenFluxProfile(
@@ -151,6 +152,16 @@ class OpenFluxUriTest {
         assertEquals("My Cups", parsed.name)
         assertEquals(OpenFluxProfile.Transport.CUPSONLINE, parsed.transport)
         assertEquals("?rooms=testBase64PackedRooms123", parsed.documentUrl)
+    }
+
+    @Test
+    fun parseBoardsHostWithoutTransportParam() {
+        val raw = "openflux://boards?url=https%3A%2F%2Fboards.yandex.ru%2Fwhiteboard%2F%3Fhash%3Dea1fa3fd647db29f766e06212a553539&k=sample-key"
+        val profile = OpenFluxUri.parse(raw)
+
+        assertEquals(OpenFluxProfile.Transport.BOARDS, profile.transport)
+        assertEquals("https://boards.yandex.ru/whiteboard/?hash=ea1fa3fd647db29f766e06212a553539", profile.documentUrl)
+        assertEquals("sample-key", profile.encryptionKey)
     }
 
     @Test

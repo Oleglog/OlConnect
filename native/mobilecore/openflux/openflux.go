@@ -102,6 +102,9 @@ func detectTransport(docURL string) string {
 	if strings.Contains(docURL, "bitrix24") {
 		return "bitrix24"
 	}
+	if strings.Contains(docURL, "boards.yandex.ru") {
+		return "boards"
+	}
 	if !strings.Contains(docURL, "://") && strings.HasPrefix(strings.TrimSpace(docURL), "Wy") {
 		return "cupsonline"
 	}
@@ -121,6 +124,45 @@ func encryptionContext(detected, docURL string) string {
 		return "avito"
 	}
 	return docURL
+}
+
+// newInnerTransport maps a transport name to its carrier. A name without a
+// case here silently becomes the classic Yandex Docs transport, so a carrier
+// the app offers in its profile editor must have a branch - otherwise the
+// client hangs on "загрузка подключения" instead of reporting an error.
+func newInnerTransport(detected, documentURL string, config transport.TransportConfig) transport.Transport {
+	switch detected {
+	case "mailru":
+		appendLog("[ANDROID] Запуск транспорта Mail.ru Docs")
+		mr := mailru.NewMailruDocsTransport(documentURL, config)
+		applySessionCookiesForDomain(mr, "mail.ru")
+		return mr
+	case "avito":
+		appendLog("[ANDROID] Обнаружен сервис Avito. Запуск транспорта avito")
+		return transport.NewStripedRoomTransport(avito.NewAvitoTransport(documentURL, config, sessionCookieHeaderForDomain("avito.ru"), true))
+	case "cupsonline", "cups":
+		appendLog("[ANDROID] Обнаружен сервис Cups.online. Запуск транспорта cupsonline")
+		return transport.NewStripedRoomTransport(cupsonline.NewCupsonlineTransport(documentURL, config, true))
+	case "telemost":
+		appendLog("[ANDROID] Обнаружена конференция Telemost. Запуск транспорта telemost")
+		return yandex.NewStripedTelemostTransport(sessionCookieHeaderForDomain("yandex.ru"), documentURL, false, config)
+	case "boards", "board":
+		appendLog("[ANDROID] Обнаружена Яндекс Доска. Запуск транспорта boards")
+		return yandex.NewBoardsTransport(documentURL, config)
+	case "bitrix24", "b24":
+		appendLog("[ANDROID] Обнаружен сервис Bitrix24. Запуск транспорта bitrix24")
+		return bitrix24.NewBitrix24Transport(documentURL, config, sessionCookieHeaderForDomain("bitrix"), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
+	case "vyandex", "volga":
+		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
+		vt := yandex.NewYandexVolgaTransportWithConfig(documentURL, config, yandex.SlimVolgaConfig())
+		applySessionCookiesForDomain(vt, "yandex.ru")
+		return vt
+	default:
+		appendLog("[ANDROID] Запуск классического транспорта yandex")
+		yt := yandex.NewYandexDocsTransport(documentURL, config)
+		applySessionCookiesForDomain(yt, "yandex.ru")
+		return yt
+	}
 }
 
 func Start(documentURL string, transportType string) string {
@@ -154,36 +196,7 @@ func Start(documentURL string, transportType string) string {
 		detected = detectTransport(documentURL)
 	}
 
-	var innerTrans transport.Transport
-	switch detected {
-	case "mailru":
-		appendLog("[ANDROID] Запуск транспорта Mail.ru Docs")
-		mr := mailru.NewMailruDocsTransport(documentURL, config)
-		applySessionCookiesForDomain(mr, "mail.ru")
-		innerTrans = mr
-	case "avito":
-		appendLog("[ANDROID] Обнаружен сервис Avito. Запуск транспорта avito")
-		innerTrans = transport.NewStripedRoomTransport(avito.NewAvitoTransport(documentURL, config, sessionCookieHeaderForDomain("avito.ru"), true))
-	case "cupsonline", "cups":
-		appendLog("[ANDROID] Обнаружен сервис Cups.online. Запуск транспорта cupsonline")
-		innerTrans = transport.NewStripedRoomTransport(cupsonline.NewCupsonlineTransport(documentURL, config, true))
-	case "telemost":
-		appendLog("[ANDROID] Обнаружена конференция Telemost. Запуск транспорта telemost")
-		innerTrans = yandex.NewStripedTelemostTransport(sessionCookieHeaderForDomain("yandex.ru"), documentURL, false, config)
-	case "bitrix24", "b24":
-		appendLog("[ANDROID] Обнаружен сервис Bitrix24. Запуск транспорта bitrix24")
-		innerTrans = bitrix24.NewBitrix24Transport(documentURL, config, sessionCookieHeaderForDomain("bitrix"), os.Getenv("B24_SESSID"), os.Getenv("B24_CHAT_ID"))
-	case "vyandex", "volga":
-		appendLog("[ANDROID] Обнаружен редактор Volga. Запуск транспорта vyandex")
-		vt := yandex.NewYandexVolgaTransportWithConfig(documentURL, config, yandex.SlimVolgaConfig())
-		applySessionCookiesForDomain(vt, "yandex.ru")
-		innerTrans = vt
-	default:
-		appendLog("[ANDROID] Запуск классического транспорта yandex")
-		yt := yandex.NewYandexDocsTransport(documentURL, config)
-		applySessionCookiesForDomain(yt, "yandex.ru")
-		innerTrans = yt
-	}
+	innerTrans := newInnerTransport(detected, documentURL, config)
 
 	encKeyMu.Lock()
 	key := encryptionKey
@@ -204,6 +217,11 @@ func Start(documentURL string, transportType string) string {
 			return err.Error()
 		}
 		innerTrans = encTrans
+	} else if detected == "boards" || detected == "board" {
+		// The board drops frames whose payload is a real IP packet
+		// (securityCode NETWORK_TRANSPORT), so a keyless boards profile
+		// connects and then carries nothing.
+		appendLog("[ANDROID] Доски без ключа шифрования: доска отбросит трафик, нужен k= в ссылке профиля")
 	}
 
 	codecMu.Lock()
