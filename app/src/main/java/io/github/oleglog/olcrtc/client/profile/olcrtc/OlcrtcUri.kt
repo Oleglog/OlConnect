@@ -1,4 +1,4 @@
-package io.github.oleglog.olcrtc.client.profile.olcrtc
+﻿package io.github.oleglog.olcrtc.client.profile.olcrtc
 
 import java.net.URI
 import java.net.URLDecoder
@@ -58,8 +58,8 @@ object OlcrtcUri {
             clientId = clientId,
             keyHex = keyHex,
             dnsServer = parameter(params, "dns", "d")?.takeIf(String::isNotBlank),
-            vp8Fps = integer(params, OlcrtcProfile.LEGACY_VP8_FPS, "vp8_fps", "f"),
-            vp8BatchSize = integer(params, OlcrtcProfile.LEGACY_VP8_BATCH, "vp8_batch", "b"),
+            vp8Fps = integer(params, OlcrtcProfile.DEFAULT_VP8_FPS, "vp8_fps", "f"),
+            vp8BatchSize = integer(params, OlcrtcProfile.DEFAULT_VP8_BATCH, "vp8_batch", "b"),
             keepaliveIntervalSeconds = integer(
                 params,
                 OlcrtcProfile.DEFAULT_KEEPALIVE_SECONDS,

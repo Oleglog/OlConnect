@@ -29,7 +29,7 @@ internal data class OlcrtcProfileEntity(
     val name: String,
     val provider: String,
     val transport: String,
-    @ColumnInfo(defaultValue = "'legacy'") val compatibilityMode: String,
+    @ColumnInfo(defaultValue = "'current'") val compatibilityMode: String,
     val roomId: String,
     val roomPassword: ByteArray?,
     val clientId: String,
@@ -192,7 +192,7 @@ internal data class SubscriptionProfileEntity(
     val groupId: Long,
     val type: String,
     val name: String,
-    @ColumnInfo(defaultValue = "'legacy'") val compatibilityMode: String,
+    @ColumnInfo(defaultValue = "'current'") val compatibilityMode: String,
     val encryptedConfigJson: ByteArray,
     val encryptedUpstreamConfigJson: ByteArray?,
     val identityHash: String,
@@ -612,7 +612,7 @@ internal class RoutingRuleRepository(
         AppRoutingEntryEntity::class,
         RoutingRuleEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 internal abstract class ClientDatabase : RoomDatabase() {
@@ -730,6 +730,31 @@ internal abstract class ClientDatabase : RoomDatabase() {
             }
         }
 
+        // v1.7.45: "legacy" stopped being the default VP8 data plane. Until then
+        // every profile carried compatibilityMode='legacy' (the column default
+        // and the 8->9 migration both wrote it, and no UI control ever changed
+        // it), and "legacy" registered the vendored snapshot of the
+        // server-v1.9.64 transport instead of the one inside the pinned core.
+        // That snapshot lacks the bounded RTP reassembly wait, so a single lost
+        // packet silenced the inbound direction for tens of seconds: the carrier
+        // took ~28 s to report ready and the exit logged every tunnel stream as
+        // in=0 out=0. Move the rows that only ever had the default onto the core
+        // transport; an explicit "legacy" from a share link stays as it is.
+        internal val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("UPDATE `olcrtc_profiles` SET `compatibilityMode` = 'current' WHERE `compatibilityMode` = 'legacy'")
+                database.execSQL("UPDATE `subscription_profiles` SET `compatibilityMode` = 'current' WHERE `compatibilityMode` = 'legacy'")
+                // Share links used to fall back to the 60 fps / batch-8 pacing
+                // pair, which caps one video sample at 8 x 1080 B and therefore
+                // a whole vp8channel direction at ~518 KB/s no matter what the
+                // line can carry. Profiles still sitting exactly on that pair
+                // never chose it — the presets are ECO (30/8), BALANCED (60/32)
+                // and MAX (120/64) — so lift them to MAX, the pacing the exits
+                // publish with.
+                database.execSQL("UPDATE `olcrtc_profiles` SET `vp8Fps` = 120, `vp8BatchSize` = 64 WHERE `vp8Fps` = 60 AND `vp8BatchSize` = 8")
+            }
+        }
+
         fun open(context: Context): ClientDatabase = Room.databaseBuilder(
             context.applicationContext,
             ClientDatabase::class.java,
@@ -745,6 +770,7 @@ internal abstract class ClientDatabase : RoomDatabase() {
             MIGRATION_8_9,
             MIGRATION_9_10,
             MIGRATION_10_11,
+            MIGRATION_11_12,
         )
             .addCallback(localGroupCallback)
             .enableMultiInstanceInvalidation()

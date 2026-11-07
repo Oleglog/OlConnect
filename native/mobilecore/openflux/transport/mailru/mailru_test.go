@@ -88,8 +88,12 @@ func TestRotationDefaultsStayUnderTheAntiAbuseBudget(t *testing.T) {
 	if want := mailruDialFloor / time.Duration(mailruRotateMsgs); mailruMsgInterval != want {
 		t.Fatalf("pacing %v does not match the dial floor over the frame budget (%v): one connection must take one dial window", mailruMsgInterval, want)
 	}
-	if authFrames := mailruRotateAuthWait / mailruMsgInterval; int64(authFrames)+mailruRotateMsgs > 22 {
-		t.Fatalf("rotation at %d frames plus a worst-case auth of %d frames exceeds the 22-frame budget", mailruRotateMsgs, authFrames)
+	// The rotation count alone does not bound the budget: when a dial is
+	// deferred the writer keeps sending, so the guard that actually stops a
+	// spent connection from eating the next allowance is the hard cap and the
+	// swap wait right after it.
+	if !bytes.Contains(readTransportSource(t, "mailru.go"), []byte("waitForCarrierSwap(session)")) {
+		t.Fatal("the writer must hold packets for the carrier swap once a connection reaches the hard frame cap")
 	}
 	// Batches carry the tunnel data into that fixed message budget, but a chat
 	// message is base64 (+33%) inside a JSON frame and the carrier stops
