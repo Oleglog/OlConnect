@@ -1,4 +1,4 @@
-package io.github.oleglog.olcrtc.client.profile.olcrtc
+﻿package io.github.oleglog.olcrtc.client.profile.olcrtc
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -47,7 +47,7 @@ class OlcrtcUriTest {
     }
 
     @Test
-    fun parsesVerboseAliasesAndLegacyDefaults() {
+    fun parsesVerboseAliasesWithMaxPacingDefaults() {
         val profile = OlcrtcUri.parse(
             "olcrtc://jitsi@room/test?key=$key&client_id=client",
         )
