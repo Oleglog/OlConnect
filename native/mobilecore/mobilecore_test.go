@@ -187,3 +187,31 @@ func TestVP8CompatibilityModes(t *testing.T) {
 		t.Fatal("registerVP8Transport accepted an unsupported mode")
 	}
 }
+
+// TestVP8TransportModeUsesCoreTransport pins the mapping that decides which VP8
+// data plane the phone actually runs. The regression it guards is not visible in
+// the core version: mobilecore used to register the vendored legacyvp8channel
+// copy for "current" as well, so bumping the core (v1.7.43) still shipped a
+// transport predating the bounded RTP reassembly wait. On a line with any packet
+// loss that turned into ~28 s of carrier readiness and tunnel streams the server
+// counted as in=0 out=0.
+func TestVP8TransportModeUsesCoreTransport(t *testing.T) {
+	for _, mode := range []string{"", "current", "CURRENT", " current "} {
+		got, err := vp8TransportMode(mode)
+		if err != nil {
+			t.Fatalf("vp8TransportMode(%q) returned an error: %v", mode, err)
+		}
+		if got != vp8TransportCore {
+			t.Fatalf("vp8TransportMode(%q) = %q, want %q: the shipped default must run the core transport", mode, got, vp8TransportCore)
+		}
+	}
+	for _, mode := range []string{"legacy", "LEGACY", " legacy "} {
+		got, err := vp8TransportMode(mode)
+		if err != nil {
+			t.Fatalf("vp8TransportMode(%q) returned an error: %v", mode, err)
+		}
+		if got != vp8TransportLegacy {
+			t.Fatalf("vp8TransportMode(%q) = %q, want %q", mode, got, vp8TransportLegacy)
+		}
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	transportregistry "github.com/openlibrecommunity/olcrtc/internal/transport"
+	currentvp8channel "github.com/openlibrecommunity/olcrtc/internal/transport/vp8channel"
 	olcrtc "github.com/openlibrecommunity/olcrtc/mobile"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/legacyvp8channel"
 	"github.com/openlibrecommunity/olcrtc/mobilecore/openflux"
@@ -373,13 +374,47 @@ func StartOlcrtc(
 }
 
 func registerVP8Transport(compatibilityMode string) error {
-	switch strings.ToLower(strings.TrimSpace(compatibilityMode)) {
-	case "", "current", "legacy":
-		transportregistry.Register("vp8channel", legacyvp8channel.New)
-	default:
-		return fmt.Errorf("unsupported olcRTC compatibility mode: %q", compatibilityMode)
+	mode, err := vp8TransportMode(compatibilityMode)
+	if err != nil {
+		return err
 	}
+	if mode == vp8TransportCore {
+		transportregistry.Register("vp8channel", currentvp8channel.New)
+		return nil
+	}
+	transportregistry.Register("vp8channel", legacyvp8channel.New)
 	return nil
+}
+
+const (
+	// vp8TransportCore is the transport that ships inside the pinned olcrtc core.
+	vp8TransportCore = "core"
+	// vp8TransportLegacy is the copy vendored under legacyvp8channel.
+	vp8TransportLegacy = "legacy"
+)
+
+// vp8TransportMode maps a compatibility mode onto the VP8 data-plane
+// implementation to register.
+//
+// "current" — and the empty default — must use the transport that ships inside
+// the pinned olcrtc core, so the client runs exactly the reassembly, sample
+// sizing and pacing code its server runs. Registering the vendored copy here is
+// what broke the phone: mobilecore/legacyvp8channel was snapshotted from
+// server-v1.9.64 and never received the bounded RTP reassembly wait, so a single
+// lost packet silenced the inbound direction for tens of seconds — the carrier
+// took ~28 s to report ready, every tunnel stream timed out waiting for its ack
+// byte, and the server logged those streams as in=0 out=0 while the client's
+// control frames (which fit one packet) still arrived. The copy stays reachable
+// behind an explicit "legacy" mode.
+func vp8TransportMode(compatibilityMode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(compatibilityMode)) {
+	case "", "current":
+		return vp8TransportCore, nil
+	case "legacy":
+		return vp8TransportLegacy, nil
+	default:
+		return "", fmt.Errorf("unsupported olcRTC compatibility mode: %q", compatibilityMode)
+	}
 }
 
 func WaitOlcrtcReady(timeoutMillis int) error {
