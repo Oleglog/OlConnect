@@ -1319,7 +1319,7 @@ class OlcrtcVpnService : VpnService() {
                 }
 
                 if (ownerUid == android.os.Process.myUid()) {
-                    return false
+                    return deny("self uid=$ownerUid proto=$protocol")
                 }
 
                 val packageNames = packageManager.getPackagesForUid(ownerUid)
@@ -1331,7 +1331,8 @@ class OlcrtcVpnService : VpnService() {
                     val matchingRule = packageRules.firstOrNull { it.value.equals(pkg, ignoreCase = true) }
                     if (matchingRule != null) {
                         return when (matchingRule.action) {
-                            RoutingRule.Action.DIRECT, RoutingRule.Action.BLOCK -> false
+                            RoutingRule.Action.DIRECT, RoutingRule.Action.BLOCK ->
+                                deny("rule $pkg ${matchingRule.action}")
                             RoutingRule.Action.VPN -> true
                         }
                     }
@@ -1339,14 +1340,36 @@ class OlcrtcVpnService : VpnService() {
 
                 return when (perAppPolicy.mode) {
                     PerAppPolicy.Mode.ALL -> true
-                    PerAppPolicy.Mode.EXCLUDE_SELECTED -> !packageNames.any { perAppPolicy.packages.contains(it) }
-                    PerAppPolicy.Mode.ONLY_SELECTED -> packageNames.any { perAppPolicy.packages.contains(it) }
+                    PerAppPolicy.Mode.EXCLUDE_SELECTED ->
+                        if (packageNames.any { perAppPolicy.packages.contains(it) }) {
+                            deny("excluded ${packageNames.joinToString(",")}")
+                        } else {
+                            true
+                        }
+                    PerAppPolicy.Mode.ONLY_SELECTED ->
+                        if (packageNames.any { perAppPolicy.packages.contains(it) }) {
+                            true
+                        } else {
+                            deny("not-selected ${packageNames.joinToString(",")}")
+                        }
                 }
             } catch (_: Throwable) {
                 return true
             }
         }
         return true
+    }
+
+    private val filterDenyLoggedAt = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** Deny a packet and name the reason once per second (field diagnostics). */
+    private fun deny(reason: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val last = filterDenyLoggedAt.get()
+        if (now - last >= 1000L && filterDenyLoggedAt.compareAndSet(last, now)) {
+            diagnostics.append("info", "TUN filter deny: $reason")
+        }
+        return false
     }
 
     private class PacketFilterCache {
