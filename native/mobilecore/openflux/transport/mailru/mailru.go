@@ -1,4 +1,4 @@
-﻿// Package mailru implements a transport that tunnels packets through
+// Package mailru implements a transport that tunnels packets through
 // Mail.ru's cloud document editor (docs.datacloudmail.ru), the same
 // coauthoring backend family as Yandex.Docs. Two peers open the same
 // public document and smuggle packets through the "cursor" field of the
@@ -41,15 +41,15 @@ var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
 // number of retries produces cookies, so the transport stops instead of looping.
 var errMailruAuthRequired = errors.New("document requires authentication (supply --cookies /path/to/cookies.txt)")
 
-// saveChangesMessageTemplate вЂ” С€Р°Р±Р»РѕРЅ saveChanges-СЃРѕРѕР±С‰РµРЅРёСЏ РІ С„РѕСЂРјР°С‚Рµ
-// РІРµР±-РєР»РёРµРЅС‚Р° Mail.ru: РґРІРµ РїРѕРґСЃС‚Р°РЅРѕРІРєРё %s вЂ” UserId Рё UserShortId РІ
-// excelAdditionalInfo. РћСЃС‚Р°Р»СЊРЅС‹Рµ РїРѕР»СЏ (op-С‹ РІ changes, Р°РЅРєРѕСЂС‹, РІРµСЂСЃРёСЏ)
-// РѕСЃС‚Р°РІР»РµРЅС‹ СЂРѕРІРЅРѕ С‚Р°РєРёРјРё, РєР°РєРёРјРё РёС… С€Р»С‘С‚ Р¶РёРІРѕР№ СЂРµРґР°РєС‚РѕСЂ; СЌС‚Рѕ С€Р°Р±Р»РѕРЅ, Р° РЅРµ
-// В«РїСЂР°РІРёР»СЊРЅР°СЏВ» СЃС‚СЂСѓРєС‚СѓСЂР° вЂ” С„РѕСЂРјР°С‚ РѕРї Р·Р°РєСЂС‹С‚С‹Р№, Рё РјС‹ С‚РѕР»СЊРєРѕ РїРѕРґСЃС‚Р°РІР»СЏРµРј СЃРІРѕРё
-// Р·РЅР°С‡РµРЅРёСЏ СѓС‡Р°СЃС‚РЅРёРєР°.
+// saveChangesMessageTemplate — шаблон saveChanges-сообщения в формате
+// веб-клиента Mail.ru: две подстановки %s — UserId и UserShortId в
+// excelAdditionalInfo. Остальные поля (op-ы в changes, анкоры, версия)
+// оставлены ровно такими, какими их шлёт живой редактор; это шаблон, а не
+// «правильная» структура — формат оп закрытый, и мы только подставляем свои
+// значения участника.
 //
-// РџРѕР»СЏ isCoAuthoring/releaseLocks = false вЂ” РѕСЃРѕР±РµРЅРЅРѕСЃС‚СЊ РёРјРµРЅРЅРѕ mail.ru
-// (Сѓ yandex.docs С‚Р°Рј true/true).
+// Поля isCoAuthoring/releaseLocks = false — особенность именно mail.ru
+// (у yandex.docs там true/true).
 const saveChangesMessageTemplate = `42["message",{"type":"saveChanges","changes":"[\"76;AgAAADEA//8BAOwbfF7pEAAALQEAAAMAAAAAAAAAAAAAAAAAAAAAAAAA9v///xoAAAAyADAAMgA2AC4AMgAuADEALgAyADIANgA4AA==\",\"35;BgAAADYAMgA3AAEAHAABAAAAAAAAAAEAAABhAAAAAAMAAAA=\",\"35;BgAAADYAMgA3AAEAHAABAAAAAQAAAAEAAABzAAAAAAMAAAA=\",\"35;BgAAADYAMgA3AAEAHAABAAAAAgAAAAEAAABkAAAAAAMAAAA=\"]","startSaveChanges":true,"endSaveChanges":true,"isCoAuthoring":false,"isExcel":false,"deleteIndex":null,"excelAdditionalInfo":"{\"UserId\":\"%s\",\"UserShortId\":\"%s\",\"CursorInfo\":\"14;BgAAADYAMgA3AAMAAAA=\"}","unlock":false,"releaseLocks":false}]`
 
 type MailruDocsInfo struct {
@@ -75,7 +75,7 @@ type DocSession struct {
 	// either we have replied authChangesAck to the server's authChanges, or
 	// the readiness fallback fired (a legacy server that never sends
 	// authChanges). The write paths hold their first co-editing write until
-	// it is closed вЂ” see markReady and handleMessage.
+	// it is closed — see markReady and handleMessage.
 	ready     chan struct{}
 	readyOnce sync.Once
 
@@ -83,7 +83,7 @@ type DocSession struct {
 	// auth (it sends type:"auth" result:1). A make-before-break rotation waits
 	// for it before moving outgoing traffic onto the new connection, so a packet
 	// is never sent on a connection the server will not yet relay (which would
-	// otherwise be lost until the Session ARQ retransmits a whole RTO later вЂ” a
+	// otherwise be lost until the Session ARQ retransmits a whole RTO later — a
 	// visible stall). See markAuthed and rotateCarrier.
 	authed     chan struct{}
 	authedOnce sync.Once
@@ -97,7 +97,7 @@ type DocSession struct {
 
 	// sentCount is the number of chat frames written on this connection. The R7
 	// server cuts an anonymous editor's socket with disconnectReason 4004
-	// ("access deny") after a per-connection chat-message budget is spent вЂ”
+	// ("access deny") after a per-connection chat-message budget is spent —
 	// measured live at ~160-220 messages, independent of size, so under load it
 	// is reached in tens of seconds, before the ~45s time kick. writerLoop
 	// rotates make-before-break once this reaches mailruRotateMsgs (well under
@@ -109,8 +109,8 @@ type DocSession struct {
 	// Exactly one is active at a time, so a rotation never delivers a frame
 	// twice (two readers delivering the same server broadcast would ACK it
 	// twice, and the duplicate ACKs make the far side fast-retransmit). The new
-	// connection reads from the moment it is dialed вЂ” to catch its auth and any
-	// early frames вЂ” but only delivers once it is installed as active; the old
+	// connection reads from the moment it is dialed — to catch its auth and any
+	// early frames — but only delivers once it is installed as active; the old
 	// one stops delivering at that same instant. installSession sets it.
 	active atomic.Bool
 }
@@ -237,7 +237,7 @@ type MailruDocsTransport struct {
 	// writeQueue is the one carrier write queue, shared by every session this
 	// transport opens. It used to live on the live DocSession, so between the
 	// drop of one connection and the install of the next Send failed with
-	// "no active session" for the whole 1-3s reconnect вЂ” dropping exactly the
+	// "no active session" for the whole 1-3s reconnect — dropping exactly the
 	// DNS replies and SYN-ACKs whose round trip was in flight and making a
 	// browsing session fail at the name-resolution step. dialAndAuth reuses it,
 	// so packets queued during the gap go out on the next connection.
@@ -285,7 +285,7 @@ type MailruDocsTransport struct {
 	// ourIDs holds every anonymous editor id this transport has authenticated as
 	// (one per carrier connection; the server assigns a fresh one each time).
 	// The receive path skips any chat frame whose useridoriginal is in this set
-	// вЂ” the server echoes our own frames back, and during a rotation's overlap
+	// — the server echoes our own frames back, and during a rotation's overlap
 	// the old connection also sees the new connection's echoes. Without tracking
 	// all of them, the old reader would re-deliver our own egress as ingress.
 	ourIDs sync.Map
@@ -293,7 +293,7 @@ type MailruDocsTransport struct {
 	// frameDedup drops a payload that arrives twice within a few hundred
 	// milliseconds. During a make-before-break rotation both carrier
 	// connections receive every broadcast, so without it the peer gets each
-	// packet twice вЂ” measured on 2026-11-07: the exit saw 2.2x more packets
+	// packet twice — measured on 2026-11-07: the exit saw 2.2x more packets
 	// than the client sent, and the duplicate SYNs it produced confused the
 	// TCP handshake. The window is deliberately short: a legitimate TCP
 	// retransmission arrives after an RTO of a second or more and must pass.
@@ -303,7 +303,7 @@ type MailruDocsTransport struct {
 	// hasCookies is set by ApplyCookies: comparing the 4004-kick budget
 	// (sentCount at kick time, logged in handleMessage) between anonymous and
 	// authorized sessions tells whether cookie sessions get a bigger message
-	// budget вЂ” right now rotation is tuned blind for both.
+	// budget — right now rotation is tuned blind for both.
 	authedConn  atomic.Int64
 	hasCookies  atomic.Bool
 	kickBudgets atomic.Int64 // kicks observed (for the Infof summary line)
@@ -465,14 +465,14 @@ func (t *MailruDocsTransport) Start() error {
 // that fixed message budget. Measured on 2026-11-07 against a live document
 // (Windows client and Linux exit on separate hosts, downloads through socks5h):
 //
-//	500 KB batches вЂ” large transfers wedge: 1 MB stalled at ~220 KB
-//	60 KB batches  вЂ” fast for pages (100 KB in 1.8 s), 1 MB stalled at 728 KB
-//	32 KB batches  вЂ” 100 KB in 1.4 s, furthest progress on 1 MB
-//	16 KB batches  вЂ” 1 MB completes, but throughput halves (21 KB/s)
+//	500 KB batches — large transfers wedge: 1 MB stalled at ~220 KB
+//	60 KB batches  — fast for pages (100 KB in 1.8 s), 1 MB stalled at 728 KB
+//	32 KB batches  — 100 KB in 1.4 s, furthest progress on 1 MB
+//	16 KB batches  — 1 MB completes, but throughput halves (21 KB/s)
 //
 // A chat message is base64 (+33%) inside a JSON text frame, so a batch stays
 // under the frame size the server accepts while still carrying ~20 segments per
-// message вЂ” which is what makes the ~25-message budget last over real traffic.
+// message — which is what makes the ~25-message budget last over real traffic.
 // 48 KB is the largest batch below the 60 KB point where a 1 MB transfer
 // stalled, and it carries 50% more tunnel data per metered frame than 32 KB.
 // OPENFLUX_BATCH_BYTES overrides this (see transport.BatchSizeHinter).
@@ -532,7 +532,7 @@ var mailruDialFloor = func() time.Duration {
 // while the old 8 wasted two thirds of every connection. Rotation is also
 // gated by mailruDialFloor, so raising this does not raise the dial rate.
 // OPENFLUX_MAILRU_ROTATE_MSGS overrides it; 0 disables pre-emptive rotation and
-// measured as the worst setting вЂ” the connection is always kicked and the
+// measured as the worst setting — the connection is always kicked and the
 // tunnel then sits dead for 8-22 s.
 const defaultMailruRotateMsgs = 16
 
@@ -549,7 +549,7 @@ var mailruRotateMsgs = func() int64 {
 // mailruHardFrameCap is the frame count a single connection must never reach:
 // the server's 4004 budget is 22-34 frames, and a connection that reaches this
 // one is already spending another connection's allowance. The writer stops
-// handing it frames and waits for the swap instead вЂ” a short queue stall is
+// handing it frames and waits for the swap instead — a short queue stall is
 // recoverable (TCP retransmits), a 4004 kick costs 8-22 s of dead tunnel.
 const mailruHardFrameCap = 20
 
@@ -559,7 +559,7 @@ const mailruHardFrameCap = 20
 // either dials faster than the carrier allows (http 429, see
 // mailruDialFloor) or idles a healthy connection while that window runs out.
 // With the defaults (15 s floor, 16 frames) that is ~940 ms per frame, giving
-// ~51 KB/s of tunnel payload вЂ” the carrier's own ceiling, not ours.
+// ~51 KB/s of tunnel payload — the carrier's own ceiling, not ours.
 //
 // An earlier fixed 150 ms pacing looked better in isolation (577 B page in
 // 0.3 s, ya.ru 1.5 s) but only because the harness dialed once per ~30 s and
@@ -744,7 +744,7 @@ func (t *MailruDocsTransport) dialAndAuth(userID string, writeQueue chan []byte)
 	}
 
 	// Remember this connection's editor id so the receive path can skip its
-	// echoes вЂ” including on the old connection during a rotation's overlap.
+	// echoes — including on the old connection during a rotation's overlap.
 	if info.EditorUserID != "" {
 		t.ourIDs.Store(info.EditorUserID, struct{}{})
 	}
@@ -881,7 +881,7 @@ func (t *MailruDocsTransport) rotationLoop() {
 				// Disabled: rotation is driven by the frame count instead (see
 				// defaultMailruRotateMs). Without this guard the age test below
 				// is always true for a 0 interval, so the transport dialed a
-				// fresh carrier on every tick вЂ” a permanent rotation loop that
+				// fresh carrier on every tick — a permanent rotation loop that
 				// burned the server's per-connection budget and left the tunnel
 				// in a reconnect gap most of the time.
 				continue
@@ -911,7 +911,7 @@ func (t *MailruDocsTransport) rotationLoop() {
 // brings up and authenticates a fresh carrier connection while old still carries
 // traffic, starts reading it, and waits for the server to accept its auth before
 // moving outgoing traffic onto it (so a packet is never sent on a connection the
-// server will not yet relay вЂ” which would stall a whole RTO). At the swap the
+// server will not yet relay — which would stall a whole RTO). At the swap the
 // new connection becomes the delivering one and old is retired and closed at
 // once: old keeps nothing in flight that new will not also receive (every chat
 // is broadcast to all our connections), and having exactly one deliverer avoids
@@ -928,7 +928,7 @@ func (t *MailruDocsTransport) rotateCarrier(old *DocSession) {
 	// connection spends its frame budget in ~15 s of traffic, so the trigger
 	// can fire again within seconds; a dial inside the floor is answered with
 	// http 429, which costs the current connection its remaining budget plus the
-	// cooldown вЂ” the worst of both outcomes. Skipping is safe: the writer keeps
+	// cooldown — the worst of both outcomes. Skipping is safe: the writer keeps
 	// its pending packet and the trigger retries as soon as the floor passes.
 	if wait := t.dialFloorRemaining(); wait > 0 {
 		utils.Debugf("[M-DOCS] rotation deferred: %v left of the %v dial floor", wait.Round(time.Millisecond), mailruDialFloor)
@@ -970,7 +970,7 @@ func (t *MailruDocsTransport) rotateCarrier(old *DocSession) {
 	}
 
 	// Swap: the new connection becomes active (and starts delivering) and old
-	// stops delivering, in one step. Then retire and close old at once вЂ” new
+	// stops delivering, in one step. Then retire and close old at once — new
 	// already receives every broadcast, so there is nothing to wait for.
 	old.active.Store(false)
 	t.installSession(session)
@@ -1043,7 +1043,7 @@ func (t *MailruDocsTransport) writerLoop() {
 		// Pace the chat-message rate to flatten retransmit bursts so they do
 		// not drain R7's 4004 message token bucket faster than a rotation can
 		// swap in a fresh connection (see mailruMsgInterval / mailruRotateMsgs).
-		// Backpressure propagates вЂ” a full WriteQueue makes Send fail and the
+		// Backpressure propagates — a full WriteQueue makes Send fail and the
 		// batcher holds the batch.
 		if mailruMsgInterval > 0 && !lastWrite.IsZero() {
 			if wait := mailruMsgInterval - time.Since(lastWrite); wait > 0 {
@@ -1090,7 +1090,7 @@ func (t *MailruDocsTransport) writerLoop() {
 			// Never write past the hard cap: the next frame on this connection
 			// would spend another connection's allowance and earn a 4004 kick,
 			// which costs an 8-22 s dead tunnel. Hold the pending packet until
-			// the swap lands instead вЂ” a short stall is recovered by TCP.
+			// the swap lands instead — a short stall is recovered by TCP.
 			if mailruHardFrameCap > 0 && n >= mailruHardFrameCap {
 				t.waitForCarrierSwap(session)
 			}
@@ -1118,7 +1118,7 @@ func (t *MailruDocsTransport) waitForCarrierSwap(spent *DocSession) {
 func (t *MailruDocsTransport) keepAliveLoop() {
 	// Disabled 2026-10-15: the application keepalive wrote a cursor message
 	// (`18;---KA---`) on the cursor channel, which the current R7 server
-	// rejects with 4004 ("access deny") and tears the whole connection down вЂ”
+	// rejects with 4004 ("access deny") and tears the whole connection down —
 	// this is what made Mail.ru fall over after a while even on a single lane.
 	// The engine.io ping/pong keeps the WebSocket alive on its own and an
 	// active tunnel is never idle, so no cursor keepalive is needed. Kept as a
@@ -1131,14 +1131,14 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 // unlockDocumentMsg releases the lock a joining editor puts on this one.
 const unlockDocumentMsg = `42["message",{"type":"unLockDocument","unlock":true,"isSave":false,"releaseLocks":false,"deleteIndex":-1}]`
 
-// editorActivityLoop РїРµСЂРёРѕРґРёС‡РµСЃРєРё РѕС‚РїСЂР°РІР»СЏРµС‚ РІ РґРѕРєСѓРјРµРЅС‚ saveChanges-СЃРѕРѕР±С‰РµРЅРёРµ
-// РІ С„РѕСЂРјР°С‚Рµ РІРµР±-РєР»РёРµРЅС‚Р° Mail.ru: Р·РЅР°С‡РµРЅРёСЏ UserId/UserShortId РїРѕРґСЃС‚Р°РІР»СЏСЋС‚СЃСЏ
-// РёР· С‚РµРєСѓС‰РµР№ СЃРµСЃСЃРёРё, РѕСЃС‚Р°Р»СЊРЅРѕРµ вЂ” С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Р№ С€Р°Р±Р»РѕРЅ (СЃРј.
-// saveChangesMessageTemplate). Р—Р°РґРµСЂР¶РєР° РјРµР¶РґСѓ РѕС‚РїСЂР°РІРєР°РјРё вЂ” СЃР»СѓС‡Р°Р№РЅР°СЏ РІ
-// РґРёР°РїР°Р·РѕРЅРµ [0.5 СЃ, 5 СЃ], С‡С‚РѕР±С‹ РїРѕС‚РѕРє РІС‹РіР»СЏРґРµР» РєР°Рє РїСЂР°РІРєРё Р¶РёРІРѕРіРѕ С‡РµР»РѕРІРµРєР°:
-// СЂРѕРІРЅС‹Р№ РїРѕ СЃСѓС‚Рё, РЅРѕ РЅРµ РјРµС‚СЂРѕРЅРѕРјРѕРј. РЎРѕРѕР±С‰РµРЅРёРµ СѓС…РѕРґРёС‚ С‡РµСЂРµР· С‚Сѓ Р¶Рµ СЃРµСЃСЃРёСЋ, С‡С‚Рѕ
-// writerLoop Рё keepAliveLoop, Рё С‚Р°Рє Р¶Рµ С‚РµСЂРїРёС‚ РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёРµ вЂ” РµСЃР»Рё СЃРµСЃСЃРёРё
-// СЃРµР№С‡Р°СЃ РЅРµС‚, РёС‚РµСЂР°С†РёСЏ РїСЂРѕСЃС‚Рѕ РїСЂРѕРїСѓСЃРєР°РµС‚СЃСЏ.
+// editorActivityLoop периодически отправляет в документ saveChanges-сообщение
+// в формате веб-клиента Mail.ru: значения UserId/UserShortId подставляются
+// из текущей сессии, остальное — фиксированный шаблон (см.
+// saveChangesMessageTemplate). Задержка между отправками — случайная в
+// диапазоне [0.5 с, 5 с], чтобы поток выглядел как правки живого человека:
+// ровный по сути, но не метрономом. Сообщение уходит через ту же сессию, что
+// writerLoop и keepAliveLoop, и так же терпит переподключение — если сессии
+// сейчас нет, итерация просто пропускается.
 func (t *MailruDocsTransport) editorActivityLoop() {
 	const (
 		minDelay = 500 * time.Millisecond
@@ -1190,11 +1190,11 @@ func canEdit(permissions map[string]interface{}) bool {
 	return !ok || edit
 }
 
-// buildSaveChanges СЃРѕР±РёСЂР°РµС‚ saveChanges-СЃРѕРѕР±С‰РµРЅРёРµ РїРѕРґ РєРѕРЅРєСЂРµС‚РЅСѓСЋ СЃРµСЃСЃРёСЋ:
-// UserId вЂ” РЅР°СЃС‚РѕСЏС‰РёР№ id СѓС‡Р°СЃС‚РЅРёРєР° (info.EditorUserID, РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІРёРё вЂ”
-// СЃРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅС‹Р№ session.UserID), UserShortId вЂ” РїСЂРѕРёР·РІРѕРґРЅР°СЏ РѕС‚ UserId
-// (РІ РІРµР±-РєР»РёРµРЅС‚Рµ Mail.ru СЌС‚Рѕ UserId Р±РµР· РїРѕСЃР»РµРґРЅРµРіРѕ СЃРёРјРІРѕР»Р°). РћСЃС‚Р°Р»СЊРЅРѕРµ вЂ” РёР·
-// С€Р°Р±Р»РѕРЅР°.
+// buildSaveChanges собирает saveChanges-сообщение под конкретную сессию:
+// UserId — настоящий id участника (info.EditorUserID, при отсутствии —
+// сгенерированный session.UserID), UserShortId — производная от UserId
+// (в веб-клиенте Mail.ru это UserId без последнего символа). Остальное — из
+// шаблона.
 func buildSaveChanges(session *DocSession) []byte {
 	userID := session.Info.EditorUserID
 	if userID == "" {
@@ -1252,7 +1252,7 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 	// The server announces why it is about to close us with a disconnectReason
 	// frame (e.g. code 4004 "access deny" anti-abuse, 4007 "drop" lock
-	// contention) just before the socket closes. Surface it at INFO вЂ” it is rare
+	// contention) just before the socket closes. Surface it at INFO — it is rare
 	// and it is the one line that explains an otherwise bare "close 1005".
 	// The sent-count at kick time is the measured 4004 budget: compare
 	// anonymous vs cookie sessions to see if authorized users get more room.
@@ -1294,7 +1294,7 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 	// Tunnel data arrives as a chat broadcast the server relays from the other
 	// participant:
-	//   42["message",{"type":"message","messages":[{message,useridoriginal,вЂ¦}]}]
+	//   42["message",{"type":"message","messages":[{message,useridoriginal,…}]}]
 	// V2 frames carry a per-transport sender id, so endpoints authenticated with
 	// the same Mail.ru account do not mistake each other for self echoes.
 	// Only the active session delivers, so a frame is never delivered twice
@@ -1341,7 +1341,7 @@ func (t *MailruDocsTransport) isOwnID(id string) bool {
 
 // decodeChatDataFilter extracts tunnel packets from a server chat broadcast
 //
-//	42["message",{"type":"message","messages":[{"message":"вЂ¦","useridoriginal":"вЂ¦"},вЂ¦]}]
+//	42["message",{"type":"message","messages":[{"message":"…","useridoriginal":"…"},…]}]
 //
 // V2 echoes are filtered by the sender id embedded in the payload. V1 remains
 // readable and falls back to useridoriginal filtering for rolling upgrades.

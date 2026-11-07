@@ -1,4 +1,4 @@
-﻿package io.github.oleglog.olcrtc.client.profile.olcrtc
+package io.github.oleglog.olcrtc.client.profile.olcrtc
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -53,8 +53,12 @@ class OlcrtcUriTest {
         )
 
         assertEquals(OlcrtcProfile.Transport.DATACHANNEL, profile.transport)
-        assertEquals(60, profile.vp8Fps)
-        assertEquals(8, profile.vp8BatchSize)
+        // A link without pacing params used to fall back to 60 fps / batch 8,
+        // which caps one vp8 sample at 8 x 1080 B and the whole direction at
+        // ~518 KB/s no matter what the line can carry. Links now inherit the
+        // pacing the exits publish.
+        assertEquals(120, profile.vp8Fps)
+        assertEquals(64, profile.vp8BatchSize)
         assertEquals(15, profile.keepaliveIntervalSeconds)
         assertEquals(OlcrtcProfile.CompatibilityMode.CURRENT, profile.compatibilityMode)
     }

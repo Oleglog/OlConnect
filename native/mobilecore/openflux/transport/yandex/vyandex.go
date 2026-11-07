@@ -1,4 +1,4 @@
-﻿package yandex
+package yandex
 
 import (
 	"bytes"
@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,8 +73,8 @@ func DefaultVolgaConfig() VolgaConfig {
 	// defaults are the values the field runs with.
 	batchSize := envIntDefault("OPENFLUX_VOLGA_BATCH", 10)
 	batchTimeout := time.Duration(envIntDefault("OPENFLUX_VOLGA_BATCH_TIMEOUT_MS", 20)) * time.Millisecond
-	// Each batch is one HTTP round trip to the relay, so the bytes per batch вЂ”
-	// not the request rate вЂ” are what the phone pays for: at the measured ~0.5 s
+	// Each batch is one HTTP round trip to the relay, so the bytes per batch —
+	// not the request rate — are what the phone pays for: at the measured ~0.5 s
 	// round trip, 24 KB per batch caps a single worker at ~48 KB/s while 48 KB
 	// caps it at ~96 KB/s for the same number of metered requests. The wire
 	// length is a uint16 in the relay frame, so 48 KB stays well inside it.
@@ -247,7 +249,7 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 				bytes.Contains(body, []byte("window.__SSR_DATA__")) ||
 				bytes.Contains(body, []byte("checkbox-captcha-form")) ||
 				bytes.Contains(body, []byte("tmgrdfrend-form")) ||
-				bytes.Contains(body, []byte("Р’С‹ РЅРµ СЂРѕР±РѕС‚?"))
+				bytes.Contains(body, []byte("Вы не робот?"))
 
 			if isCaptcha {
 				utils.Debugf("[VOLGA] captcha HTML detected in 200 OK from %s, solving...", currentURL)
@@ -408,7 +410,7 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 	utils.Debugf("[VOLGA] Location: %s", location[:minInt(len(location), 300)])
 
 	if strings.Contains(location, "/document/error/") {
-		return nil, fmt.Errorf("auth/initial returned /document/error/ вЂ” check access_token_ttl and Referer")
+		return nil, fmt.Errorf("auth/initial returned /document/error/ — check access_token_ttl and Referer")
 	}
 
 	locParsed, err := url.Parse(location)
@@ -1567,6 +1569,54 @@ func maxU64(a, b uint64) uint64 {
 // into the transport's cookie jar, so it opens the document signed in.
 func (t *YandexVolgaTransport) LoadCookieFile(path string) error {
 	return loadYandexCookies(path, t.jar())
+}
+
+// SaveCookieFile writes the transport's current session cookies back to path in
+// the same shape LoadCookieFile accepts, so a restart of the instance keeps the
+// login.
+//
+// Volga rotates its session cookies on nearly every request: the jar the
+// process holds is not the jar on disk, and a restart re-reads the stale file
+// and dies with "yandex docs: login required". That is what took exit @5 down on
+// 2026-11-07 — it had been running for hours on a live session and could not
+// come back after a redeploy. Only the cookies this document's hosts actually
+// hold are persisted, one "name=value; ..." line, which the loader applies to
+// every yandex host.
+func (t *YandexVolgaTransport) SaveCookieFile(path string) error {
+	jar := t.jar()
+	values := make(map[string]string)
+	for _, raw := range []string{"https://yandex.ru", "https://docs.yandex.ru", t.docURL} {
+		u, err := url.Parse(raw)
+		if err != nil || u == nil || u.Host == "" {
+			continue
+		}
+		for _, c := range jar.Cookies(u) {
+			if c.Name == "" || c.Value == "" {
+				continue
+			}
+			values[c.Name] = c.Value
+		}
+	}
+	if len(values) == 0 {
+		return fmt.Errorf("volga: no session cookies to save yet")
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+values[name])
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(parts, "; ")+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write Yandex cookie file: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("replace Yandex cookie file: %w", err)
+	}
+	return nil
 }
 
 func (t *YandexVolgaTransport) jar() *cookiejar.Jar {

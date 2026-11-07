@@ -1,4 +1,4 @@
-﻿package mailru
+package mailru
 
 import (
 	"bytes"

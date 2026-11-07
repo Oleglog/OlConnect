@@ -29,7 +29,12 @@ internal data class OlcrtcProfileEntity(
     val name: String,
     val provider: String,
     val transport: String,
-    @ColumnInfo(defaultValue = "'current'") val compatibilityMode: String,
+    // The column default stays 'legacy' on purpose: Room compares the declared
+    // default against the live table when it validates a migration, and the
+    // table was created with 'legacy' by MIGRATION_8_9. MIGRATION_11_12 moves
+    // the rows onto 'current'; every insert passes the value explicitly, so the
+    // column default is never consulted for new profiles.
+    @ColumnInfo(defaultValue = "'legacy'") val compatibilityMode: String,
     val roomId: String,
     val roomPassword: ByteArray?,
     val clientId: String,
@@ -192,7 +197,7 @@ internal data class SubscriptionProfileEntity(
     val groupId: Long,
     val type: String,
     val name: String,
-    @ColumnInfo(defaultValue = "'current'") val compatibilityMode: String,
+    @ColumnInfo(defaultValue = "'legacy'") val compatibilityMode: String,
     val encryptedConfigJson: ByteArray,
     val encryptedUpstreamConfigJson: ByteArray?,
     val identityHash: String,
@@ -748,9 +753,9 @@ internal abstract class ClientDatabase : RoomDatabase() {
                 // pair, which caps one video sample at 8 x 1080 B and therefore
                 // a whole vp8channel direction at ~518 KB/s no matter what the
                 // line can carry. Profiles still sitting exactly on that pair
-                // never chose it — the presets are ECO (30/8), BALANCED (60/32)
-                // and MAX (120/64) — so lift them to MAX, the pacing the exits
-                // publish with.
+                // never chose it (the presets are ECO 30/8, BALANCED 60/32 and
+                // MAX 120/64), so lift them to MAX, the pacing the exits publish
+                // with.
                 database.execSQL("UPDATE `olcrtc_profiles` SET `vp8Fps` = 120, `vp8BatchSize` = 64 WHERE `vp8Fps` = 60 AND `vp8BatchSize` = 8")
             }
         }
