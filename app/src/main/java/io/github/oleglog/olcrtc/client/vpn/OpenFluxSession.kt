@@ -206,7 +206,9 @@ internal class OpenFluxSession(
         // stack never ACKs, so dump the first few inbound headers to see what
         // actually lands on the TUN.
         if (injectTrace.get() < 300) {
-            runCatching { onLog("inbound#${injectTrace.incrementAndGet()} ${describePacket(packet)}") }
+            val n = injectTrace.incrementAndGet()
+            val hex = if (n <= 6) " hex=" + packet.joinToString("") { Integer.toHexString(it.toInt() and 0xff).padStart(2, '0') } else ""
+            runCatching { onLog("inbound#$n ${describePacket(packet)}$hex") }
         }
         synchronized(outputLock) {
             if (!closed.get()) {
