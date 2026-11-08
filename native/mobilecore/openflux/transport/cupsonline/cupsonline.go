@@ -74,6 +74,13 @@ type CupsonlineConfig struct {
 	MaxMessageData  int
 	MaxCursors      int
 	BatchTimeout    time.Duration
+	// BatchLingerMs is the upper batcher's coalescing window. The carrier moves
+	// 10-25 KB/s, so the window sets the object size: at the batcher's default
+	// 5 ms a busy channel shipped near-empty objects, the stripe retransmitted
+	// more than it sent (rtx 492 > tx 421, loss 27-71%) and the relay treated
+	// the bursts as abuse. 100 ms turns that into full 24 KB objects at the
+	// same rate. OPENFLUX_CUPS_BATCH_LINGER_MS overrides it.
+	BatchLingerMs int
 
 	// SendInterval is the least time between two messages on one channel.
 	// cups.online throttles inbound, and firing messages back to back stalls
@@ -134,6 +141,12 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		MaxMessageData: cupsEnvInt("OPENFLUX_CUPS_MAX_MESSAGE", 8192),
 		MaxCursors:     1000,
 		BatchTimeout:   2 * time.Millisecond,
+		// 100 ms: the upper batcher may send 24 KB per object here (3/4 of
+		// BatchMaxBytes), and at 10-25 KB/s that object takes 1-2 s to fill only
+		// on a saturated link - the window is what keeps it from leaving
+		// half-empty. Anything below ~20 ms brings back the 5 ms behaviour the
+		// phone showed (rtx > tx, loss 27-71%).
+		BatchLingerMs: cupsEnvInt("OPENFLUX_CUPS_BATCH_LINGER_MS", 100),
 		// 12ms (~83 msg/s per channel) — calibrated by bench_tune.py:
 		// 8192B@12ms = 447 KB/s per lane (2.8× vs old 4096@18ms=159 KB/s);
 		// 10ms triggers 403. OPENFLUX_CUPS_SEND_INTERVAL_MS overrides it.
@@ -623,6 +636,12 @@ type cupsWS struct {
 
 	sendQueue chan []byte
 
+	// pongDue/pongCh move the reply to a server ping off the data path: the
+	// read goroutine only raises the flag, pongLoop writes the "{}" itself, so
+	// a pong waits for at most one data write instead of a queue of them.
+	pongDue atomic.Bool
+	pongCh  chan struct{}
+
 	stats *channelStats
 }
 
@@ -631,6 +650,12 @@ func (w *cupsWS) nextID() int64 { return w.rpcID.Add(1) }
 func (w *cupsWS) auth() *cupsAuth { return w.authPtr.Load() }
 
 func (w *cupsWS) writeRaw(data []byte) error {
+	// A queued pong goes first: it is the server's keepalive check, and holding
+	// it behind a burst of data writes is how a busy channel gets closed with
+	// 3012 "no pong". The wait is bounded - data must not starve either.
+	for i := 0; i < 100 && w.pongDue.Load(); i++ {
+		time.Sleep(100 * time.Microsecond)
+	}
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
 	if w.conn == nil {
@@ -645,6 +670,27 @@ func (w *cupsWS) writeRaw(data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// pongLoop answers server pings on its own path, so a pong waits for at most
+// one data write instead of for a whole queue of them.
+func (w *cupsWS) pongLoop() {
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-w.pongCh:
+			if !w.pongDue.CompareAndSwap(true, false) {
+				continue
+			}
+			w.writeMu.Lock()
+			if w.conn != nil {
+				w.conn.SetWriteDeadline(time.Now().Add(pongWriteTimeout))
+				_ = w.conn.WriteMessage(websocket.TextMessage, []byte("{}"))
+			}
+			w.writeMu.Unlock()
+		}
+	}
 }
 
 func (w *cupsWS) writeJSON(v interface{}) error {
@@ -677,6 +723,14 @@ const allPoolDeadRetryMax = 2 * time.Minute
 // inside 100-400 ms when the peer is there, so a minute of one-way traffic is
 // a dead pair, not a slow one.
 const peerSilentAfter = 60 * time.Second
+
+// pongWriteTimeout bounds the pong write: the server's ping interval is tens of
+// seconds, and a pong stuck on a wedged socket must not sit in pongLoop.
+const pongWriteTimeout = 2 * time.Second
+
+// silentRejoinMinInterval paces forced rejoins after a silent peer: a join is
+// two page loads, and a storm of them is what gets this address rate limited.
+const silentRejoinMinInterval = 15 * time.Second
 
 func (w *cupsWS) run() {
 	delay := w.config.ReconnectMinDelay
@@ -1113,7 +1167,14 @@ func (w *cupsWS) handleMessage(raw []byte) {
 // a batch from the peer.
 func (w *cupsWS) handleReply(raw []byte) {
 	if isPing(raw) {
-		_ = w.writeRaw([]byte("{}"))
+		// Never write the pong here: this goroutine also carries the data the
+		// tunnel arrives with, and a pong that waits for that write is the
+		// 3012 "no pong" close seen on the stand.
+		w.pongDue.Store(true)
+		select {
+		case w.pongCh <- struct{}{}:
+		default:
+		}
 		return
 	}
 	var obj map[string]interface{}
@@ -1265,6 +1326,12 @@ type CupsonlineTransport struct {
 	replMu      sync.Mutex
 	lastReplace time.Time
 
+	// rejoinMu/lastRejoin pace forced rejoins after the stripe reports a silent
+	// peer: a join is two page loads, and a reconnect storm is how this address
+	// gets rate limited.
+	rejoinMu   sync.Mutex
+	lastRejoin time.Time
+
 	statsStart time.Time
 }
 
@@ -1325,6 +1392,7 @@ func (t *CupsonlineTransport) Start() error {
 			config:      t.config,
 			ctx:         t.ctx,
 			sendQueue:   make(chan []byte, t.config.SendQueueSize),
+			pongCh:      make(chan struct{}, 1),
 			stats:       &channelStats{idx: i, roomUUID: s.id},
 		}
 		// Command ids 1 and 2 are connect and subscribe.
@@ -1348,6 +1416,7 @@ func (t *CupsonlineTransport) Start() error {
 	for _, ws := range wss {
 		go ws.run()
 		go ws.sendLoop()
+		go ws.pongLoop()
 	}
 
 	utils.Debugf("[CUPS] transport started: %d channels", len(t.wss))
@@ -1590,6 +1659,40 @@ func (t *CupsonlineTransport) Send(data []byte) error {
 	return nil
 }
 
+// PeerSilentFor is the stripe telling this carrier that nothing came back for
+// silentFor with inflight pieces in flight: the rooms are open, the peer behind
+// them is not answering. Writing into them only feeds the retransmit storm the
+// relay answers with losses and refusals, so the sockets are dropped: run()
+// rejoins with fresh tokens, and on an exit a room the relay closed is replaced.
+func (t *CupsonlineTransport) PeerSilentFor(silentFor time.Duration, inflight int) {
+	if silentFor < peerSilentAfter {
+		return
+	}
+	now := time.Now()
+	t.rejoinMu.Lock()
+	if !t.lastRejoin.IsZero() && now.Sub(t.lastRejoin) < silentRejoinMinInterval {
+		t.rejoinMu.Unlock()
+		return
+	}
+	t.lastRejoin = now
+	t.rejoinMu.Unlock()
+	utils.Infof("[CUPS] peer silent for %s with %d inflight, backing off and rejoining the rooms",
+		silentFor.Round(time.Millisecond), inflight)
+	for _, ws := range t.wss {
+		ws.dropConn()
+	}
+}
+
+// dropConn closes this channel's socket so run() reconnects it (and, on an
+// exit, replaces a room the relay has closed).
+func (w *cupsWS) dropConn() {
+	w.writeMu.Lock()
+	if w.conn != nil {
+		_ = w.conn.Close()
+	}
+	w.writeMu.Unlock()
+}
+
 // pickRoom returns the next connected room in round-robin order, or nil when
 // none is up.
 func (t *CupsonlineTransport) pickRoom() *cupsWS {
@@ -1623,6 +1726,18 @@ func (t *CupsonlineTransport) PreferredBatchBytes() int {
 		return 16_000
 	}
 	return t.config.BatchMaxBytes * 3 / 4
+}
+
+// PreferredBatchLingerMs is how long the upper batcher may coalesce before it
+// flushes. Without it the batcher uses its 5 ms default, which on a 10-25 KB/s
+// carrier ships near-empty objects: the phone's log showed rtx > tx, loss
+// 27-71% and a "4th send" every second - the stripe choking on its own small
+// objects, which is what the relay answers with refusals.
+func (t *CupsonlineTransport) PreferredBatchLingerMs() int {
+	if t.config.BatchLingerMs <= 0 {
+		return 0
+	}
+	return t.config.BatchLingerMs
 }
 
 // IsConnected is true while at least one room's channel is up, so the app

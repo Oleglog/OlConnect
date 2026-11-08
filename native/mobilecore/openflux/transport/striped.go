@@ -79,6 +79,11 @@ type StripedTransport struct {
 	// stops itself so the node supervisor restarts the process. Zero disables.
 	healthDeadline time.Duration
 	allDeadSince   time.Time
+
+	// peerSilent is set while the far side has sent nothing back (no ack, no
+	// piece) for peerSilentAfter with pieces in flight. The carrier's sockets
+	// stay open either way - that is how traffic died with lanes up=1/1.
+	peerSilent atomic.Bool
 }
 
 const maxStripeLanes = 64
@@ -137,6 +142,13 @@ type LossReporter interface {
 	UplinkLoss() float64
 }
 
+// SilenceSignaler is implemented by lanes that want to hear when the far side
+// stopped answering while pieces were in flight: a room carrier drops and
+// rejoins its rooms then, instead of writing into rooms nobody sits in.
+type SilenceSignaler interface {
+	PeerSilentFor(silentFor time.Duration, inflight int)
+}
+
 // Wire formats. The first byte tells them apart from each other and from the
 // lanes' own filler, which carries no stripe header at all.
 //
@@ -189,7 +201,6 @@ var (
 	// (it renegotiates the subscriptions when someone joins or leaves); the
 	// tunnel's TCP waits that out (see tcpMinRTO) and loses nothing.
 	holeDeadline = envMs("STRIPE_HOLE_MS", 5000)
-
 	// CoDel on the shared send queue: when the oldest frame has waited longer
 	// than codelTarget for a whole codelInterval, drop at the head, faster
 	// while it lasts. The carrier's rate swings by half from second to second
@@ -202,6 +213,29 @@ var (
 
 	// sendQueueLimit bounds the send queue (bytes) whatever CoDel decides.
 	sendQueueLimit = envIntOr("STRIPE_QUEUE_BYTES", 4<<20)
+)
+
+// Retransmission limits. The phone's session showed rtx 492 against 421 pieces
+// sent - a piece written again every ~1.2 s regardless of RTO - so the sender
+// now backs off exponentially and spends a bounded number of retransmissions a
+// second per lane:
+const (
+	maxRtxShift = 3                // RTO, 2x, 4x, 8x - then the cap below
+	maxRtxWait  = 3 * time.Second  // no piece waits longer than this for a retry
+	rtxBurst    = 6.0              // a lane may spend this many retransmits at once
+)
+
+// rtxPerSec caps retransmissions per lane: a piece lost on a dead or refusing
+// lane must not turn into a flood of writes, which is what the relay answers
+// with losses and refusals of its own.
+var rtxPerSec = float64(envIntOr("STRIPE_RTX_PER_SEC", 12))
+
+// Peer silence: acks (or any received piece) are the only honest sign the far
+// side is there. The rooms can be open with nobody behind them, and then the
+// sender used to keep writing at full speed into the void.
+const (
+	peerSilentAfter      = 4 * time.Second
+	peerSilentMinInflight = 8
 )
 
 // laneReorderSlack: a piece counts as lost once a piece that left more than
@@ -360,6 +394,7 @@ func (s *StripedTransport) Start() error {
 	go s.ackLoop()
 	go s.lossLoop()
 	go s.statsLoop()
+	go s.silenceLoop()
 	if _, ok := s.src.(WatchSource); ok {
 		go s.watchLoop()
 	}
@@ -616,8 +651,63 @@ func (s *StripedTransport) watchLoop() {
 	}
 }
 
-func (s *StripedTransport) statsLoop() {
-	t := time.NewTicker(5 * time.Second)
+// peerSilentNow reports whether the far side has been quiet long enough with
+// pieces in flight to stop writing: an idle tunnel (nothing in flight) is not
+// silent, it is idle.
+func peerSilentNow(quiet time.Duration, inflight int) bool {
+	return quiet > peerSilentAfter && inflight >= peerSilentMinInflight
+}
+
+// silenceLoop watches for a peer that stopped answering. Acks and delivered
+// pieces are the only proof it is there: a room carrier's sockets stay open
+// with nobody behind them, and the sender used to keep writing at full speed
+// into the void (the phone's session: rx=0 for good, lanes up=1/1, no error).
+// While silent the sender holds everything but the ack, and the lanes that can
+// rejoin do so.
+func (s *StripedTransport) silenceLoop() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	var lastAck, lastDel uint64
+	var aliveAt time.Time
+	var now time.Time
+	for {
+		select {
+		case <-s.done:
+			return
+		case now = <-t.C:
+		}
+		acks := s.ackRecv.Load()
+		del, _, _, _, _ := s.ro.snapshot()
+		if acks != lastAck || del != lastDel {
+			lastAck, lastDel, aliveAt = acks, del, now
+		}
+		if aliveAt.IsZero() {
+			aliveAt = now
+			continue
+		}
+		inflight := s.snd.inflightPieces()
+		silent := peerSilentNow(now.Sub(aliveAt), inflight)
+		if silent == s.peerSilent.Load() {
+			continue
+		}
+		s.peerSilent.Store(silent)
+		s.snd.setSilent(silent)
+		lanes, _ := s.snapshotLanes()
+		if !silent {
+			utils.Infof("[STRIPE] peer is back after %s, resuming", now.Sub(aliveAt).Round(time.Millisecond))
+			continue
+		}
+		utils.Infof("[STRIPE] peer silent for %s with %d pieces in flight, holding the link",
+			now.Sub(aliveAt).Round(time.Millisecond), inflight)
+		for _, l := range lanes {
+			if ss, ok := l.(SilenceSignaler); ok {
+				ss.PeerSilentFor(now.Sub(aliveAt), inflight)
+			}
+		}
+	}
+}
+
+func (s *StripedTransport) statsLoop() {	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -638,8 +728,7 @@ func (s *StripedTransport) statsLoop() {
 			_ = s.Stop()
 			if fatalOnAllLanesDead.Load() {
 				// Hand the node back to its supervisor: a process that keeps
-				// running with no lane looks healthy and carries nothing. The
-				// mobile client never enables this (see ExitOnAllLanesDead).
+				// running with no lane looks healthy and carries nothing.
 				utils.Infof("[STRIPE] exiting so the supervisor restarts the node")
 				os.Exit(1)
 			}
@@ -846,6 +935,13 @@ type sender struct {
 	minRTT       time.Duration
 	minRTTAt     time.Time
 	triesLogAt   time.Time
+	gaveUpAt     time.Time
+
+	// rtxBudget is the retransmission allowance, refilled at rtxPerSec;
+	// silent stops new sends and retries while the peer is not answering.
+	rtxBudget float64
+	rtxAt     time.Time
+	silent    bool
 
 	pieceBytes  int  // max payload bytes per piece (defaults to stripePieceBytes)
 	noOrderLoss bool // when true, disable single-lane FIFO out-of-order loss inference
@@ -920,6 +1016,11 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 		out = append(out, q.ack)
 		q.ack = nil
 	}
+	if q.silent {
+		// Nothing comes back: sending more only feeds the retransmit storm.
+		// The ack above still goes out, so the far side learns what arrived.
+		return out
+	}
 	ls := &q.lane[i]
 	if !q.noOrderLoss {
 		if allowed := ls.allow(now); max-len(out) > allowed {
@@ -946,6 +1047,7 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 	}
 	start := len(out)
 	if !dead && len(q.rtxQ) > 0 {
+		q.refillRtx(now)
 		// Resend on another lane than the one that lost it when there is
 		// one: losses come in bursts, and the lane may still be in one.
 		others := q.othersAlive(i, now)
@@ -957,10 +1059,11 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 			}
 			// ...but not for long: the others may be failing too.
 			mine := others && int(e.lane) == i && now.Sub(e.at) < 2*q.rto()
-			if len(out) >= max || mine {
+			if len(out) >= max || mine || q.rtxBudget < 1 {
 				keep = append(keep, sq)
 				continue
 			}
+			q.rtxBudget--
 			e.queued = false
 			if e.tries < 255 {
 				e.tries++
@@ -1285,8 +1388,8 @@ func (q *sender) detectLoss(now time.Time) bool {
 // that has waited longer than the timeout (doubled once it has been resent:
 // a lost resend should not cost the stream hundreds of milliseconds more).
 func (q *sender) detectLocked(now time.Time) bool {
-	rto := q.rto()
 	added := false
+	gaveUp := 0
 	for x := q.low; seqBefore(x, q.seq+1); x++ {
 		e := &q.ring[x%txRingSize]
 		if !e.ok || e.seq != x {
@@ -1298,6 +1401,7 @@ func (q *sender) detectLocked(now time.Time) bool {
 			// keep the lanes busy and the ring full.
 			e.ok, e.buf, e.queued = false, nil, false
 			q.gaveUp++
+			gaveUp++
 			continue
 		}
 		if e.queued {
@@ -1305,8 +1409,7 @@ func (q *sender) detectLocked(now time.Time) bool {
 		}
 		byLane := !q.noOrderLoss && q.laneAck[e.lane] > e.laneIdx+laneReorderSlack
 		if !byLane {
-			wait := rto << min(max(int(e.tries)-1, 0), 1)
-			if now.Sub(e.at) < wait {
+			if now.Sub(e.at) < q.rtxWait(e.tries) {
 				continue
 			}
 			q.rtxTime++
@@ -1323,7 +1426,53 @@ func (q *sender) detectLocked(now time.Time) bool {
 		}
 		q.low++
 	}
+	if gaveUp > 0 && now.Sub(q.gaveUpAt) > time.Second {
+		q.gaveUpAt = now
+		utils.Infof("[STRIPE] gave up on %d piece(s) after %s without an ack (total %d): the peer is not answering, not just slow",
+			gaveUp, giveUpAfter.Round(time.Second), q.gaveUp)
+	}
 	return added
+}
+
+// rtxWait is how long a piece waits before its next send: the RTO, doubled on
+// every further attempt up to maxRtxShift. The phone's log showed the old box
+// (rto << min(tries-1, 1)) sending one piece four times in five seconds while
+// rtx ran ahead of tx - a dead or refusing peer written to every round trip.
+func (q *sender) rtxWait(tries uint8) time.Duration {
+	wait := q.rto() << min(max(int(tries)-1, 0), maxRtxShift)
+	if wait > maxRtxWait {
+		return maxRtxWait
+	}
+	return wait
+}
+
+// refillRtx tops up the retransmission allowance, bounded to a burst so a long
+// quiet spell cannot be spent as one flood.
+func (q *sender) refillRtx(now time.Time) {
+	if q.rtxAt.IsZero() {
+		q.rtxAt, q.rtxBudget = now, rtxBurst
+		return
+	}
+	q.rtxBudget += now.Sub(q.rtxAt).Seconds() * rtxPerSec
+	if q.rtxBudget > rtxBurst {
+		q.rtxBudget = rtxBurst
+	}
+	q.rtxAt = now
+}
+
+// inflightPieces is how many pieces wait for an ack.
+func (q *sender) inflightPieces() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return int(q.seq + 1 - q.low)
+}
+
+// setSilent stops or resumes sending: with no acks coming back there is no
+// point writing at all.
+func (q *sender) setSilent(v bool) {
+	q.mu.Lock()
+	q.silent = v
+	q.mu.Unlock()
 }
 
 // giveUpAfter is how long the sender keeps resending a piece: longer than the
