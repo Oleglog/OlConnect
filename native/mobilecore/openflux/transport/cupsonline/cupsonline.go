@@ -1,4 +1,4 @@
-﻿package cupsonline
+package cupsonline
 
 import (
 	"bytes"
@@ -94,6 +94,12 @@ type CupsonlineConfig struct {
 	NumRooms        int
 	RoomCreatePause time.Duration
 
+	// RoomReplaceMinInterval paces replacing a room the relay closed with a
+	// fresh one: every replacement changes the room list the phone needs, and
+	// creating rooms is rate limited, so the exit swaps at most one room this
+	// often.
+	RoomReplaceMinInterval time.Duration
+
 	StatsInterval time.Duration
 }
 
@@ -156,6 +162,10 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// OPENFLUX_CUPS_ROOMS overrides it.
 		NumRooms:        cupsEnvInt("OPENFLUX_CUPS_ROOMS", 8),
 		RoomCreatePause: 500 * time.Millisecond,
+
+		// One swap per half minute: the relay rate limits room creation, and a
+		// burst of replacements would look exactly like the abuse it blocks.
+		RoomReplaceMinInterval: 30 * time.Second,
 
 		StatsInterval: 5 * time.Second,
 	}
@@ -298,6 +308,10 @@ var (
 	errRefused = errors.New("refused")
 	errNoRoom  = errors.New("cups: нет подключённой комнаты")
 	errStopped = errors.New("cups: транспорт остановлен")
+	// errNoReplace says no fresh room was made this time: the transport is a
+	// client (only the exit creates rooms), a swap just happened (RoomReplace-
+	// MinInterval), or room creation failed.
+	errNoReplace = errors.New("cups: замену комнаты не делаю")
 )
 
 func joinURL(roomUUID string) string { return baseRoomURL + "?room=" + roomUUID }
@@ -582,6 +596,13 @@ type cupsWS struct {
 	lastSend    time.Time     // sendLoop goroutine only; paces messages
 	onRoomState func()
 
+	// replace, set by the transport on the exit side, swaps this channel's
+	// closed room for a fresh one; nil when nobody may create rooms. pool
+	// reports how many rooms of the pool are alive, so a channel whose room is
+	// gone retries faster while the whole pool is down.
+	replace func(old string) (*cupsAuth, error)
+	pool    func() (alive, total int)
+
 	config CupsonlineConfig
 	conn   *websocket.Conn
 
@@ -646,6 +667,17 @@ func (w *cupsWS) currentConn() *websocket.Conn {
 // reported closed even though its page still loads.
 const roomDeadAfterFails = 5
 
+// allPoolDeadRetryMax caps the retry of a closed room while every room of the
+// pool is closed: the relay is either rate limiting this address or the whole
+// list is stale, and half an hour of silence is not an answer to either.
+const allPoolDeadRetryMax = 2 * time.Minute
+
+// peerSilentAfter is how long traffic may be offered with nothing coming back
+// before the transport stops calling itself connected. A room carrier answers
+// inside 100-400 ms when the peer is there, so a minute of one-way traffic is
+// a dead pair, not a slow one.
+const peerSilentAfter = 60 * time.Second
+
 func (w *cupsWS) run() {
 	delay := w.config.ReconnectMinDelay
 	fails := 0
@@ -669,7 +701,7 @@ func (w *cupsWS) run() {
 		if w.ctx.Err() != nil {
 			return
 		}
-		utils.Debugf("[CUPS] ws error (%s): %v", w.roomUUID, err)
+		utils.Debugf("[CUPS] ws error (%s): %v", w.room(), err)
 		if wasReady {
 			delay = w.config.ReconnectMinDelay
 			fails = 0
@@ -699,6 +731,14 @@ func (w *cupsWS) retryDelay(delay time.Duration) time.Duration {
 	}
 	d := w.goneDelay
 	w.goneDelay = min(2*d, w.config.RoomGoneRetryMax)
+	// With every room of the pool down nothing else carries the traffic, and
+	// the relay's refusals are usually a passing rate limit: come back within
+	// minutes instead of growing to half an hour in a dark tunnel.
+	if w.pool != nil {
+		if alive, total := w.pool(); alive == 0 && total > 0 {
+			return min(d, allPoolDeadRetryMax)
+		}
+	}
 	return d
 }
 
@@ -709,14 +749,30 @@ func (w *cupsWS) backoff(delay time.Duration) time.Duration {
 // join enters the room for fresh tokens, in the same session as before. This
 // is also where a closed room shows itself.
 func (w *cupsWS) join() error {
-	a, err := joinRoom(w.ctx, w.roomUUID, w.session)
+	was := w.room()
+	a, err := joinRoom(w.ctx, was, w.session)
 	if err != nil {
 		// Next time from a clean session, in case this one is what's broken.
 		w.session = nil
 		if errors.Is(err, errRoomGone) {
 			w.markDead(err)
+			// A closed room would leave the pool short for good: the neighbour
+			// side is pinned to this list. On the exit a fresh room takes its
+			// place and the new list goes out to the phone.
+			if w.replace != nil {
+				fresh, rerr := w.replace(was)
+				if rerr == nil {
+					w.adopt(fresh)
+					utils.Infof("[CUPS] Cups: комната %s закрыта, заменил на %s",
+						shortRoom(was), shortRoom(fresh.roomUUID))
+					return nil
+				}
+				if !errors.Is(rerr, errNoReplace) {
+					utils.Debugf("[CUPS] replace %s: %v", shortRoom(was), rerr)
+				}
+			}
 		} else if w.ctx.Err() == nil {
-			utils.Debugf("[CUPS] join %s failed: %v", w.roomUUID, err)
+			utils.Debugf("[CUPS] join %s failed: %v", shortRoom(was), err)
 		}
 		return err
 	}
@@ -725,12 +781,31 @@ func (w *cupsWS) join() error {
 	return nil
 }
 
+// room is the uuid this channel is on now: the one it was born with until a
+// replacement takes over, then the fresh one.
+func (w *cupsWS) room() string {
+	if a := w.auth(); a != nil {
+		return a.roomUUID
+	}
+	return w.roomUUID
+}
+
+// adopt moves this channel to a fresh room: new tokens, a new uuid, and a
+// clean reassembly buffer, because the peer stream there starts from zero.
+func (w *cupsWS) adopt(a *cupsAuth) {
+	w.session = a.httpClient
+	w.authPtr.Store(a)
+	w.recvBufs = nil
+	w.joinedAt = time.Now()
+	w.markAlive()
+}
+
 func (w *cupsWS) markDead(err error) {
 	if w.dead.Swap(true) {
 		return
 	}
 	utils.Infof("[ERROR] Cups: комната %s закрылась (в работе %s): %v",
-		shortRoom(w.roomUUID), fmtUptime(time.Since(w.joinedAt)), err)
+		shortRoom(w.room()), fmtUptime(time.Since(w.joinedAt)), err)
 	if w.onRoomState != nil {
 		w.onRoomState()
 	}
@@ -741,7 +816,7 @@ func (w *cupsWS) markAlive() {
 	if !w.dead.Swap(false) {
 		return
 	}
-	utils.Infof("[CUPS] Cups: комната %s снова доступна", shortRoom(w.roomUUID))
+	utils.Infof("[CUPS] Cups: комната %s снова доступна", shortRoom(w.room()))
 	if w.onRoomState != nil {
 		w.onRoomState()
 	}
@@ -864,7 +939,7 @@ func (w *cupsWS) sendLoop() {
 			w.stats.dropped.Add(uint64(len(batch)))
 		} else if err := w.sendBatch(batch); err != nil {
 			w.stats.dropped.Add(uint64(len(batch)))
-			utils.Debugf("[CUPS] batch send (%s): %v", w.roomUUID, err)
+			utils.Debugf("[CUPS] batch send (%s): %v", w.room(), err)
 		}
 		clear(batch)
 		batch = batch[:0]
@@ -1129,7 +1204,7 @@ func (w *cupsWS) handleReply(raw []byte) {
 		delete(w.recvBufs, sender)
 	case len(rest) > w.config.MaxPayloadBytes+w.config.MaxMessageData:
 		// A stream that never yields a packet must not grow without bound.
-		utils.Debugf("[CUPS] recv stream out of sync (%s), resetting", w.roomUUID)
+		utils.Debugf("[CUPS] recv stream out of sync (%s), resetting", w.room())
 		delete(w.recvBufs, sender)
 	default:
 		w.recvBufs[sender] = rest
@@ -1176,6 +1251,19 @@ type CupsonlineTransport struct {
 	wss []*cupsWS
 	// rr round-robins outbound frames across the connected rooms; see Send.
 	rr atomic.Uint32
+
+	// lastSend/lastRecv drive the peer-silence check in IsConnected: a room
+	// carrier's websockets stay up while the peer is gone, so "connected"
+	// alone would leave a dead tunnel looking healthy - which is exactly how
+	// traffic died silently on the stand.
+	lastSend atomic.Int64
+	lastRecv atomic.Int64
+
+	// replMu/lastReplace pace replacing closed rooms on the exit side: every
+	// swap changes the room list the phone needs, and room creation is rate
+	// limited.
+	replMu      sync.Mutex
+	lastReplace time.Time
 
 	statsStart time.Time
 }
@@ -1247,7 +1335,13 @@ func (t *CupsonlineTransport) Start() error {
 		}
 		// Already reported by enterRooms; run() only probes it now and then.
 		ws.dead.Store(errors.Is(s.err, errRoomGone))
-		ws.onData = t.CallReceive
+		ws.onData = func(pkt []byte) { t.noteRecv(); t.CallReceive(pkt) }
+		ws.pool = t.liveRooms
+		// Only the exit may create rooms, and only it owns the list the
+		// phone follows: a closed room becomes a fresh one there.
+		if !t.isClient {
+			ws.replace = t.replaceDeadRoom
+		}
 		wss[i] = ws
 	}
 	t.wss = wss
@@ -1284,6 +1378,12 @@ func (t *CupsonlineTransport) enterRooms() ([]roomSlot, error) {
 		// retried. Dropping them left the peer's traffic in those rooms with
 		// nobody listening.
 		if joined > 0 {
+			// An exit whose list still holds rooms the relay closed replaces
+			// them now, before the phone is handed the list: 7 of 8 rooms is
+			// money lost on arrival, not an error to live with.
+			if !t.isClient && joined < len(slots) {
+				slots = t.topUpRooms(slots)
+			}
 			t.setRoomList(t.roomIDs)
 			return slots, nil
 		}
@@ -1350,6 +1450,94 @@ func (t *CupsonlineTransport) setRoomList(ids []string) {
 	}
 }
 
+// noteRecv marks a packet as received, for the peer-silence check.
+func (t *CupsonlineTransport) noteRecv() { t.lastRecv.Store(time.Now().UnixNano()) }
+
+// liveRooms reports how many channels of the pool are not marked closed.
+func (t *CupsonlineTransport) liveRooms() (alive, total int) {
+	for _, ws := range t.wss {
+		if !ws.dead.Load() {
+			alive++
+		}
+	}
+	return alive, len(t.wss)
+}
+
+// silentPeer reports whether traffic has been offered for peerSilentAfter with
+// nothing received since: the rooms are up, the peer behind them is not.
+func (t *CupsonlineTransport) silentPeer() bool {
+	sent := t.lastSend.Load()
+	if sent == 0 {
+		return false
+	}
+	if t.lastRecv.Load() >= sent {
+		return false
+	}
+	return time.Since(time.Unix(0, sent)) > peerSilentAfter
+}
+
+// replaceDeadRoom creates a fresh room for a channel whose room the relay
+// closed and publishes the new list, so the phone can follow it instead of
+// staying in a room nobody is in. errNoReplace says the swap was refused: the
+// client side never creates rooms, and the exit paces its swaps.
+func (t *CupsonlineTransport) replaceDeadRoom(old string) (*cupsAuth, error) {
+	if t.isClient {
+		return nil, errNoReplace
+	}
+	t.replMu.Lock()
+	defer t.replMu.Unlock()
+	if !t.lastReplace.IsZero() && time.Since(t.lastReplace) < t.config.RoomReplaceMinInterval {
+		return nil, errNoReplace
+	}
+	auths, err := createRooms(t.ctx, t.baseURL, 1, t.config.RoomCreatePause)
+	if err != nil {
+		return nil, fmt.Errorf("replace %s: %w", shortRoom(old), err)
+	}
+	t.lastReplace = time.Now()
+	t.swapRoomID(old, auths[0].roomUUID)
+	return auths[0], nil
+}
+
+// swapRoomID puts fresh in the pool where old was and announces the new list.
+func (t *CupsonlineTransport) swapRoomID(old, fresh string) {
+	t.roomsMu.Lock()
+	swapped := false
+	for i, id := range t.roomIDs {
+		if id == old {
+			t.roomIDs[i] = fresh
+			swapped = true
+			break
+		}
+	}
+	if !swapped {
+		t.roomIDs = append(t.roomIDs, fresh)
+	}
+	ids := append([]string(nil), t.roomIDs...)
+	t.roomsMu.Unlock()
+	t.setRoomList(ids)
+}
+
+// topUpRooms replaces the rooms the relay had already closed when Start ran, so
+// the pool comes up whole: each missing room is a slice of the throughput lost
+// for the whole session, and the closed id never works again.
+func (t *CupsonlineTransport) topUpRooms(slots []roomSlot) []roomSlot {
+	for i := range slots {
+		if slots[i].auth != nil || t.ctx.Err() != nil {
+			continue
+		}
+		auths, err := createRooms(t.ctx, t.baseURL, 1, t.config.RoomCreatePause)
+		if err != nil {
+			utils.Debugf("[CUPS] top-up %s: %v", shortRoom(slots[i].id), err)
+			continue
+		}
+		t.swapRoomID(slots[i].id, auths[0].roomUUID)
+		utils.Infof("[CUPS] Cups: вместо закрытой комнаты %s завёл %s",
+			shortRoom(slots[i].id), shortRoom(auths[0].roomUUID))
+		slots[i] = roomSlot{id: auths[0].roomUUID, auth: auths[0]}
+	}
+	return slots
+}
+
 // joinListed enters all the listed rooms at once rather than one by one: on
 // a phone each join is two round trips, and Start blocks the app until
 // they're done.
@@ -1395,7 +1583,11 @@ func (t *CupsonlineTransport) Send(data []byte) error {
 	if ws == nil {
 		return errNoRoom
 	}
-	return ws.Send(data)
+	if err := ws.Send(data); err != nil {
+		return err
+	}
+	t.lastSend.Store(time.Now().UnixNano())
+	return nil
 }
 
 // pickRoom returns the next connected room in round-robin order, or nil when
@@ -1434,17 +1626,25 @@ func (t *CupsonlineTransport) PreferredBatchBytes() int {
 }
 
 // IsConnected is true while at least one room's channel is up, so the app
-// stops claiming "connected" once every room has gone away.
+// stops claiming "connected" once every room has gone away. A channel that is
+// up but has carried nothing back for a minute counts as gone: the relay keeps
+// its websocket open when the peer disappears, and that difference between "up"
+// and "alive" is what let a dead tunnel look healthy.
 func (t *CupsonlineTransport) IsConnected() bool {
 	if !t.BaseTransport.IsConnected() {
 		return false
 	}
+	up := false
 	for _, ws := range t.wss {
 		if ws.connected.Load() {
-			return true
+			up = true
+			break
 		}
 	}
-	return false
+	if !up {
+		return false
+	}
+	return !t.silentPeer()
 }
 
 // reportRooms logs how many rooms are still alive whenever one of them
@@ -1522,7 +1722,7 @@ func (t *CupsonlineTransport) statsLoop() {
 				totalBytesRecv += br
 
 				utils.Debugf("[CH-%02d %s] tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  drop=%d  reconn=%d  conn=%v",
-					i, shortRoom(ws.roomUUID),
+					i, shortRoom(ws.room()),
 					dS/uint64(t.config.StatsInterval.Seconds()),
 					float64(dBS)/t.config.StatsInterval.Seconds()/1024,
 					dR/uint64(t.config.StatsInterval.Seconds()),
@@ -1555,7 +1755,7 @@ func (t *CupsonlineTransport) statsLoop() {
 func (t *CupsonlineTransport) RoomUUIDs() []string {
 	out := make([]string, 0, len(t.wss))
 	for _, ws := range t.wss {
-		out = append(out, ws.roomUUID)
+		out = append(out, ws.room())
 	}
 	return out
 }
