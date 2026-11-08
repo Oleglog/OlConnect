@@ -20,10 +20,10 @@ internal enum class RailCode(val letter: Char) {
     NONE('.');
 
     companion object {
-        fun parse(letter: Char): RailCode = entries.firstOrNull { it.letter == letter } ?: NONE
+        fun parse(letter: Char): RailCode = RailCode.entries.firstOrNull { it.letter == letter } ?: NONE
 
         fun parse(codes: String?): List<RailCode> =
-            codes.orEmpty().map(::parse).takeLast(RAIL_SLOTS)
+            codes.orEmpty().map { letter -> parse(letter) }.takeLast(RAIL_SLOTS)
     }
 }
 

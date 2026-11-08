@@ -28,10 +28,6 @@
         <item name="colorOnError">@color/olcrtc_on_error</item>
         <item name="colorErrorContainer">@color/state_down_ink</item>
         <item name="colorOnErrorContainer">@color/state_down</item>
-        <item name="colorSurfaceTint">@android:color/transparent</item>
-        <item name="colorInverseSurface">@color/olcrtc_ink</item>
-        <item name="colorInverseOnSurface">@color/olcrtc_bg</item>
-        <item name="colorInversePrimary">@color/olcrtc_accent_dim</item>
         <item name="android:colorBackground">@color/olcrtc_bg</item>
         <item name="android:navigationBarColor">@color/olcrtc_bg</item>
         <item name="android:statusBarColor">@color/olcrtc_bg</item>
