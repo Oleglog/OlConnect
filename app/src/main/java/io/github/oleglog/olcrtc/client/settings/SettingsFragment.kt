@@ -102,6 +102,32 @@ class SettingsFragment : Fragment() {
         binding.settingsUpdatesSummary.text = getString(R.string.settings_version_summary, BuildConfig.VERSION_NAME)
         binding.settingsDiagnosticsSummary.setText(R.string.settings_diagnostics_row_summary)
         binding.settingsAboutSummary.text = getString(R.string.settings_version_summary, BuildConfig.VERSION_NAME)
+        // Issue #47: the tunnel toggles live in the "Туннель" group now. Same
+        // RoutingSettings calls the VPN screen used, so behaviour is unchanged.
+        binding.autoFailover.isChecked = settings.getAutoFailover()
+        binding.autoFailover.setOnCheckedChangeListener { button, checked ->
+            button.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+            persistTunnelToggle { settings.setAutoFailoverBlocking(checked) }
+        }
+        binding.udpRelay.isChecked = settings.getUdpRelay()
+        binding.udpRelay.setOnCheckedChangeListener { button, checked ->
+            button.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+            persistTunnelToggle { settings.setUdpRelayBlocking(checked) }
+        }
+    }
+
+    /** Writes a tunnel toggle off the main thread and names the failure if any. */
+    private fun persistTunnelToggle(save: () -> Unit) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { save() } }
+            result.onFailure { showStatus(it.message) }
+        }
+    }
+
+    private fun showStatus(message: String?) {
+        val status = _binding?.status ?: return
+        status.text = message
+        status.visibility = if (message.isNullOrBlank()) View.GONE else View.VISIBLE
     }
 
     override fun onStart() {

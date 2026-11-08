@@ -186,32 +186,6 @@ class ConnectionFragment : Fragment() {
         binding.contentStateAction.setOnClickListener { showAddConnectionMenu() }
         binding.testSelected.setOnClickListener { testSelectedProfile() }
         binding.testAllProfiles.setOnClickListener { testAllProfiles() }
-        // Issue #47: Auto failover toggle. Persisted in RoutingSettings,
-        // default off; the service reads it on each failure.
-        binding.autoFailover.isChecked = settings.getAutoFailover()
-        binding.autoFailover.setOnCheckedChangeListener { _, checked ->
-            binding.autoFailover.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-            storage.execute {
-                val saved = runCatching { settings.setAutoFailoverBlocking(checked) }
-                activity?.runOnUiThread {
-                    if (_binding == null) return@runOnUiThread
-                    saved.onFailure { showStatus(it.message) }
-                }
-            }
-        }
-        // UDP relay over the olcRTC carrier (server-v1.9.76+). Default off;
-        // takes effect on the next connect, same as auto failover.
-        binding.udpRelay.isChecked = settings.getUdpRelay()
-        binding.udpRelay.setOnCheckedChangeListener { _, checked ->
-            binding.udpRelay.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-            storage.execute {
-                val saved = runCatching { settings.setUdpRelayBlocking(checked) }
-                activity?.runOnUiThread {
-                    if (_binding == null) return@runOnUiThread
-                    saved.onFailure { showStatus(it.message) }
-                }
-            }
-        }
         updateConnectGlow()
     }
 

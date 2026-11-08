@@ -30,7 +30,7 @@
             android:textColor="?attr/colorOnSurface"
             android:textSize="24sp"
             app:backgroundTint="?attr/colorSurfaceContainerHigh"
-            app:cornerRadius="14dp" />
+            app:cornerRadius="@dimen/corner_button" />
 
         <LinearLayout
             android:layout_width="0dp"
@@ -109,7 +109,7 @@
                             android:layout_height="64dp"
                             android:layout_gravity="center"
                             app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
-                            app:cardCornerRadius="32dp"
+                            app:cardCornerRadius="@dimen/corner_card"
                             app:cardElevation="0dp"
                             app:strokeColor="?attr/colorOutline"
                             app:strokeWidth="1dp">
@@ -217,19 +217,19 @@
                             android:insetTop="0dp"
                             android:insetBottom="0dp"
                             android:maxLines="2"
-                            android:minHeight="72dp"
+                            android:minHeight="64dp"
                             android:minWidth="0dp"
                             android:paddingStart="2dp"
                             android:paddingEnd="2dp"
                             android:text="@string/appearance_palette_system"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="11sp"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Label"
                             app:backgroundTint="@color/appearance_palette_background"
-                            app:cornerRadius="14dp"
+                            app:cornerRadius="@dimen/corner_button"
                             app:icon="@drawable/swatch_palette_system"
                             app:iconGravity="textTop"
                             app:iconPadding="6dp"
-                            app:iconSize="28dp"
+                            app:iconSize="24dp"
                             app:iconTint="@null"
                             app:strokeColor="@color/appearance_palette_stroke"
                             app:strokeWidth="1dp" />
@@ -245,19 +245,19 @@
                             android:insetTop="0dp"
                             android:insetBottom="0dp"
                             android:maxLines="2"
-                            android:minHeight="72dp"
+                            android:minHeight="64dp"
                             android:minWidth="0dp"
                             android:paddingStart="2dp"
                             android:paddingEnd="2dp"
                             android:text="@string/appearance_palette_neutral"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="11sp"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Label"
                             app:backgroundTint="@color/appearance_palette_background"
-                            app:cornerRadius="14dp"
+                            app:cornerRadius="@dimen/corner_button"
                             app:icon="@drawable/swatch_palette_neutral"
                             app:iconGravity="textTop"
                             app:iconPadding="6dp"
-                            app:iconSize="28dp"
+                            app:iconSize="24dp"
                             app:iconTint="@null"
                             app:strokeColor="@color/appearance_palette_stroke"
                             app:strokeWidth="1dp" />
@@ -273,19 +273,19 @@
                             android:insetTop="0dp"
                             android:insetBottom="0dp"
                             android:maxLines="2"
-                            android:minHeight="72dp"
+                            android:minHeight="64dp"
                             android:minWidth="0dp"
                             android:paddingStart="2dp"
                             android:paddingEnd="2dp"
                             android:text="@string/appearance_palette_bronze"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="11sp"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Label"
                             app:backgroundTint="@color/appearance_palette_background"
-                            app:cornerRadius="14dp"
+                            app:cornerRadius="@dimen/corner_button"
                             app:icon="@drawable/swatch_palette_bronze"
                             app:iconGravity="textTop"
                             app:iconPadding="6dp"
-                            app:iconSize="28dp"
+                            app:iconSize="24dp"
                             app:iconTint="@null"
                             app:strokeColor="@color/appearance_palette_stroke"
                             app:strokeWidth="1dp" />
@@ -301,19 +301,19 @@
                             android:insetTop="0dp"
                             android:insetBottom="0dp"
                             android:maxLines="2"
-                            android:minHeight="72dp"
+                            android:minHeight="64dp"
                             android:minWidth="0dp"
                             android:paddingStart="2dp"
                             android:paddingEnd="2dp"
                             android:text="@string/appearance_palette_black"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="11sp"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Label"
                             app:backgroundTint="@color/appearance_palette_background"
-                            app:cornerRadius="14dp"
+                            app:cornerRadius="@dimen/corner_button"
                             app:icon="@drawable/swatch_palette_black"
                             app:iconGravity="textTop"
                             app:iconPadding="6dp"
-                            app:iconSize="28dp"
+                            app:iconSize="24dp"
                             app:iconTint="@null"
                             app:strokeColor="@color/appearance_palette_stroke"
                             app:strokeWidth="1dp" />
@@ -328,19 +328,19 @@
                             android:insetTop="0dp"
                             android:insetBottom="0dp"
                             android:maxLines="2"
-                            android:minHeight="72dp"
+                            android:minHeight="64dp"
                             android:minWidth="0dp"
                             android:paddingStart="2dp"
                             android:paddingEnd="2dp"
                             android:text="@string/appearance_palette_mono"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="11sp"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Label"
                             app:backgroundTint="@color/appearance_palette_background"
-                            app:cornerRadius="14dp"
+                            app:cornerRadius="@dimen/corner_button"
                             app:icon="@drawable/swatch_palette_mono"
                             app:iconGravity="textTop"
                             app:iconPadding="6dp"
-                            app:iconSize="28dp"
+                            app:iconSize="24dp"
                             app:iconTint="@null"
                             app:strokeColor="@color/appearance_palette_stroke"
                             app:strokeWidth="1dp" />
@@ -388,7 +388,7 @@
                                 android:minWidth="0dp"
                                 android:text="@string/appearance_accent_auto"
                                 app:backgroundTint="?attr/colorSurfaceContainerHigh"
-                                app:cornerRadius="16dp" />
+                                app:cornerRadius="@dimen/corner_button" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/accent_teal"
@@ -403,7 +403,7 @@
                                 android:minWidth="0dp"
                                 android:text=""
                                 app:backgroundTint="@color/appearance_accent_teal"
-                                app:cornerRadius="16dp" />
+                                app:cornerRadius="@dimen/corner_button" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/accent_blue"
@@ -418,7 +418,7 @@
                                 android:minWidth="0dp"
                                 android:text=""
                                 app:backgroundTint="@color/appearance_accent_blue"
-                                app:cornerRadius="16dp" />
+                                app:cornerRadius="@dimen/corner_button" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/accent_violet"
@@ -433,7 +433,7 @@
                                 android:minWidth="0dp"
                                 android:text=""
                                 app:backgroundTint="@color/appearance_accent_violet"
-                                app:cornerRadius="16dp" />
+                                app:cornerRadius="@dimen/corner_button" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/accent_rose"
@@ -448,7 +448,7 @@
                                 android:minWidth="0dp"
                                 android:text=""
                                 app:backgroundTint="@color/appearance_accent_rose"
-                                app:cornerRadius="16dp" />
+                                app:cornerRadius="@dimen/corner_button" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/accent_amber"
@@ -462,7 +462,7 @@
                                 android:minWidth="0dp"
                                 android:text=""
                                 app:backgroundTint="@color/appearance_accent_amber"
-                                app:cornerRadius="16dp" />
+                                app:cornerRadius="@dimen/corner_button" />
                         </LinearLayout>
                     </HorizontalScrollView>
                 </LinearLayout>

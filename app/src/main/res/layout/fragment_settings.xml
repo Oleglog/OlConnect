@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Settings, per client-settings.html: groups of 48 px rows, label on the left
+     and the value in mono on the right. Behaviour lives in the fragment; the two
+     tunnel switches moved here from the VPN screen and keep their ids. -->
 <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -20,171 +23,26 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/navigation_settings"
-            android:textAppearance="?attr/textAppearanceHeadlineSmall" />
+            android:textAppearance="@style/TextAppearance.Olcrtc.TitleLarge" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_1"
-            android:text="@string/settings_intro"
-            android:textAppearance="?attr/textAppearanceBodyMedium"
-            android:textColor="?attr/colorOnSurfaceVariant" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_5"
-            android:layout_marginBottom="@dimen/space_2"
-            android:text="@string/settings_group_connection"
-            android:textAppearance="?attr/textAppearanceLabelLarge"
-            android:textColor="?attr/colorOnSurfaceVariant" />
-
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            app:cardBackgroundColor="?attr/colorSurface"
-            app:cardCornerRadius="@dimen/corner_quiet"
-            app:cardElevation="0dp"
-            app:strokeColor="?attr/colorOutline"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <LinearLayout
-                    android:id="@+id/settings_routing_row"
-                    style="@style/Widget.OlcrtcClient.SettingsRow"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content">
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_routing_title"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_routing_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
-
-                    <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
-                        android:contentDescription="@null"
-                        android:importantForAccessibility="no"
-                        android:padding="12dp"
-                        android:src="@drawable/ic_chevron_right_24"
-                        app:tint="?attr/colorOnSurfaceVariant" />
-                </LinearLayout>
-
-                <View style="@style/Widget.OlcrtcClient.SettingsDivider" />
-
-                <LinearLayout
-                    android:id="@+id/settings_apps_row"
-                    style="@style/Widget.OlcrtcClient.SettingsRow"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content">
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_per_app_title"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_apps_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
-
-                    <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
-                        android:contentDescription="@null"
-                        android:importantForAccessibility="no"
-                        android:padding="12dp"
-                        android:src="@drawable/ic_chevron_right_24"
-                        app:tint="?attr/colorOnSurfaceVariant" />
-                </LinearLayout>
-
-                <View style="@style/Widget.OlcrtcClient.SettingsDivider" />
-
-                <LinearLayout
-                    android:id="@+id/settings_dns_row"
-                    style="@style/Widget.OlcrtcClient.SettingsRow"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content">
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/dns_server"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_dns_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
-
-                    <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
-                        android:contentDescription="@null"
-                        android:importantForAccessibility="no"
-                        android:padding="12dp"
-                        android:src="@drawable/ic_chevron_right_24"
-                        app:tint="?attr/colorOnSurfaceVariant" />
-                </LinearLayout>
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
+        <!-- Оформление ------------------------------------------------------ -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/space_5"
             android:layout_marginBottom="@dimen/space_2"
             android:text="@string/settings_group_interface"
-            android:textAppearance="?attr/textAppearanceLabelLarge"
+            android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
             android:textColor="?attr/colorOnSurfaceVariant" />
 
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardBackgroundColor="?attr/colorSurfaceVariant"
-            app:cardCornerRadius="@dimen/corner_quiet"
-            app:cardElevation="0dp">
+            app:cardBackgroundColor="?attr/colorSurfaceContainer"
+            app:cardCornerRadius="@dimen/corner_card"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutlineVariant"
+            app:strokeWidth="@dimen/card_border">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -197,33 +55,31 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content">
 
-                    <LinearLayout
+                    <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:orientation="vertical">
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_appearance_title"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
 
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_appearance_title"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_appearance_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/settings_appearance_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
 
                     <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
                         android:contentDescription="@null"
                         android:importantForAccessibility="no"
-                        android:padding="12dp"
                         android:src="@drawable/ic_chevron_right_24"
                         app:tint="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>
@@ -236,56 +92,260 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content">
 
-                    <LinearLayout
+                    <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:orientation="vertical">
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_system_title"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
 
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_system_title"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_system_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/settings_system_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
 
                     <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
                         android:contentDescription="@null"
                         android:importantForAccessibility="no"
-                        android:padding="12dp"
                         android:src="@drawable/ic_chevron_right_24"
                         app:tint="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- Туннель --------------------------------------------------------- -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_5"
+            android:layout_marginBottom="@dimen/space_2"
+            android:text="@string/settings_group_connection"
+            android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="?attr/colorSurfaceContainer"
+            app:cardCornerRadius="@dimen/corner_card"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutlineVariant"
+            app:strokeWidth="@dimen/card_border">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:id="@+id/settings_routing_row"
+                    style="@style/Widget.OlcrtcClient.SettingsRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_routing_title"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
+
+                    <TextView
+                        android:id="@+id/settings_routing_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    <ImageView
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
+                        android:contentDescription="@null"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_chevron_right_24"
+                        app:tint="?attr/colorOnSurfaceVariant" />
+                </LinearLayout>
+
+                <View style="@style/Widget.OlcrtcClient.SettingsDivider" />
+
+                <LinearLayout
+                    android:id="@+id/settings_apps_row"
+                    style="@style/Widget.OlcrtcClient.SettingsRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_per_app_title"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
+
+                    <TextView
+                        android:id="@+id/settings_apps_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    <ImageView
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
+                        android:contentDescription="@null"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_chevron_right_24"
+                        app:tint="?attr/colorOnSurfaceVariant" />
+                </LinearLayout>
+
+                <View style="@style/Widget.OlcrtcClient.SettingsDivider" />
+
+                <LinearLayout
+                    android:id="@+id/settings_dns_row"
+                    style="@style/Widget.OlcrtcClient.SettingsRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/dns_server"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
+
+                    <TextView
+                        android:id="@+id/settings_dns_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    <ImageView
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
+                        android:contentDescription="@null"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_chevron_right_24"
+                        app:tint="?attr/colorOnSurfaceVariant" />
+                </LinearLayout>
+
+                <View style="@style/Widget.OlcrtcClient.SettingsDivider" />
+
+                <LinearLayout
+                    style="@style/Widget.OlcrtcClient.SettingsRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="@dimen/space_2"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/failover_auto_title"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="@string/failover_auto_subtitle"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+                    </LinearLayout>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/auto_failover"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <View style="@style/Widget.OlcrtcClient.SettingsDivider" />
+
+                <LinearLayout
+                    style="@style/Widget.OlcrtcClient.SettingsRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="@dimen/space_2"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/udp_relay_title"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="@string/udp_relay_subtitle"
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+                    </LinearLayout>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/udp_relay"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Служебное ------------------------------------------------------- -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/space_5"
             android:layout_marginBottom="@dimen/space_2"
             android:text="@string/settings_group_support"
-            android:textAppearance="?attr/textAppearanceLabelLarge"
+            android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
             android:textColor="?attr/colorOnSurfaceVariant" />
 
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardBackgroundColor="?attr/colorSurface"
-            app:cardCornerRadius="@dimen/corner_quiet"
+            app:cardBackgroundColor="?attr/colorSurfaceContainer"
+            app:cardCornerRadius="@dimen/corner_card"
             app:cardElevation="0dp"
-            app:strokeColor="?attr/colorOutline"
-            app:strokeWidth="1dp">
+            app:strokeColor="?attr/colorOutlineVariant"
+            app:strokeWidth="@dimen/card_border">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -298,33 +358,31 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content">
 
-                    <LinearLayout
+                    <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:orientation="vertical">
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_updates_title"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
 
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_updates_title"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_updates_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/settings_updates_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
 
                     <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
                         android:contentDescription="@null"
                         android:importantForAccessibility="no"
-                        android:padding="12dp"
                         android:src="@drawable/ic_chevron_right_24"
                         app:tint="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>
@@ -337,33 +395,31 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content">
 
-                    <LinearLayout
+                    <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:orientation="vertical">
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_diagnostics_title"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
 
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_diagnostics_title"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_diagnostics_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/settings_diagnostics_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
 
                     <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
                         android:contentDescription="@null"
                         android:importantForAccessibility="no"
-                        android:padding="12dp"
                         android:src="@drawable/ic_chevron_right_24"
                         app:tint="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>
@@ -376,33 +432,31 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content">
 
-                    <LinearLayout
+                    <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:orientation="vertical">
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_about"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
 
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_about"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <TextView
-                            android:id="@+id/settings_about_summary"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/settings_about_summary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
 
                     <ImageView
-                        android:layout_width="@dimen/icon_touch_target"
-                        android:layout_height="@dimen/icon_touch_target"
+                        android:layout_width="@dimen/icon_action_size"
+                        android:layout_height="@dimen/icon_action_size"
+                        android:layout_marginStart="@dimen/space_1"
                         android:contentDescription="@null"
                         android:importantForAccessibility="no"
-                        android:padding="12dp"
                         android:src="@drawable/ic_chevron_right_24"
                         app:tint="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>
@@ -414,7 +468,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/space_4"
-            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
             android:textColor="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>
