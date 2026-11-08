@@ -21,6 +21,15 @@ const (
 	defaultLingerMs      = 5
 	batchQueueDepth      = 4096
 	ctrlQueueDepth       = 64
+
+	// quickLingerMs is the deadline of a batch that carries only small packets.
+	// An ACK or a keystroke must not wait the bulk deadline out: every round trip
+	// through the tunnel pays it, and TCP slow-start cannot ramp. The bulk
+	// deadline stays for data that fills an object.
+	quickLingerMs = 50
+	// smallPacketBytes divides an interactive packet from a bulk segment: the
+	// tunnel's segments are ~1.4 KiB, an ACK is ~50-90 bytes.
+	smallPacketBytes = 512
 )
 
 // ErrQueueFull is what TrySend returns when the control queue has no room.
@@ -77,31 +86,52 @@ type BatchLingerHinter interface {
 	PreferredBatchLingerMs() int
 }
 
+// batchBytes is the size limit of one coalesced message: the OPENFLUX_BATCH_BYTES
+// env var wins, then the carrier's own hint, then the global default. The env
+// var is what an experiment on a live stand sets without a rebuild, so it must
+// not be silently overruled by a carrier's default operating point.
+func batchBytes(inner Transport) int {
+	if v := envInt("OPENFLUX_BATCH_BYTES", 0); v > 0 {
+		return v
+	}
+	if hinter, ok := inner.(BatchSizeHinter); ok && hinter.PreferredBatchBytes() > 0 {
+		return hinter.PreferredBatchBytes()
+	}
+	return defaultMaxBatchBytes
+}
+
+// batchLingerMs is the deadline of one coalesced message, with the same order of
+// precedence: env var, carrier hint, global default. The deadline is what decides
+// the object size (carrier bytes/s x linger), and the carrier rate is only
+// objects/s x object size, so this number is the throughput knob.
+func batchLingerMs(inner Transport) int {
+	if v := envInt("OPENFLUX_BATCH_LINGER_MS", 0); v > 0 {
+		return v
+	}
+	if hinter, ok := inner.(BatchLingerHinter); ok && hinter.PreferredBatchLingerMs() > 0 {
+		return hinter.PreferredBatchLingerMs()
+	}
+	return defaultLingerMs
+}
+
 func NewBatchedTransport(inner Transport) *BatchedTransport {
-	maxBytes := envInt("OPENFLUX_BATCH_BYTES", 0)
-	if maxBytes <= 0 {
-		if hinter, ok := inner.(BatchSizeHinter); ok && hinter.PreferredBatchBytes() > 0 {
-			maxBytes = hinter.PreferredBatchBytes()
-		} else {
-			maxBytes = defaultMaxBatchBytes
-		}
-	}
-	linger := envInt("OPENFLUX_BATCH_LINGER_MS", 0)
-	if linger <= 0 {
-		if hinter, ok := inner.(BatchLingerHinter); ok && hinter.PreferredBatchLingerMs() > 0 {
-			linger = hinter.PreferredBatchLingerMs()
-		} else {
-			linger = defaultLingerMs
-		}
-	}
-	return &BatchedTransport{
+	b := &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
 		ctrl:          make(chan []byte, ctrlQueueDepth),
-		lingerMs:      linger,
-		maxBatchBytes: maxBytes,
+		lingerMs:      batchLingerMs(inner),
+		maxBatchBytes: batchBytes(inner),
 		maxBatchCount: envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount),
 	}
+	// One line per process, so a stand run can tell whether the env var it set is
+	// the value in force before blaming the carrier for the throughput.
+	quick := quickLingerMs
+	if b.lingerMs < quick {
+		quick = b.lingerMs
+	}
+	utils.Debugf("[BATCH] batch=%d bytes, linger=%d ms (small packets flush after %d ms), max %d packets",
+		b.maxBatchBytes, b.lingerMs, quick, b.maxBatchCount)
+	return b
 }
 
 func (b *BatchedTransport) Start() error {
@@ -193,6 +223,25 @@ func (b *BatchedTransport) Receive(callback func([]byte)) {
 	})
 }
 
+// lingerFor is the deadline of one batch: the full linger for data that fills an
+// object, the quick one for a batch of small packets only. Holding an ACK for the
+// bulk deadline costs that deadline on every round trip.
+func (b *BatchedTransport) lingerFor(batch [][]byte) time.Duration {
+	if b.lingerMs <= 0 {
+		return 0
+	}
+	full := time.Duration(b.lingerMs) * time.Millisecond
+	for _, p := range batch {
+		if len(p) >= smallPacketBytes {
+			return full
+		}
+	}
+	if quick := time.Duration(quickLingerMs) * time.Millisecond; quick < full {
+		return quick
+	}
+	return full
+}
+
 func (b *BatchedTransport) flushLoop() {
 	for b.running.Load() {
 		// Control frames jump the queue: the handshake must never stand behind
@@ -224,11 +273,12 @@ func (b *BatchedTransport) flushLoop() {
 			}
 		}
 
-		// Phase 2: brief linger to catch stragglers arriving just after the
-		// burst. Negligible next to the channel RTT, but it fills batches
-		// during steady bulk transfer.
-		if b.lingerMs > 0 && size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
-			timer := time.NewTimer(time.Duration(b.lingerMs) * time.Millisecond)
+		// Phase 2: linger to catch stragglers arriving just after the burst, so a
+		// steady transfer fills the batch instead of spending an event per
+		// segment. The deadline depends on what the batch carries: bulk data waits
+		// the carrier's window, small packets (an ACK, a keystroke) do not.
+		if deadline := b.lingerFor(batch); deadline > 0 && size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
+			timer := time.NewTimer(deadline)
 		linger:
 			for size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
 				select {
