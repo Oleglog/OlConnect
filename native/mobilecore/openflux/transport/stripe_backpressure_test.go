@@ -71,6 +71,9 @@ func TestSilentSenderSendsNothingButTheAck(t *testing.T) {
 	}
 
 	q.setSilent(false)
+	if !q.enqueue([]byte("frame")) {
+		t.Fatal("enqueue refused on an empty queue")
+	}
 	if len(q.pull(0, 100, time.Now())) == 0 {
 		t.Fatal("after the peer is back the sender still sends nothing")
 	}
