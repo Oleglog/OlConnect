@@ -1713,6 +1713,11 @@ func (t *BoardsTransport) statsLoop(sess *boardsSession) {
 // object, and resending is the same bet the tunnel makes on any lost frame.
 func (t *BoardsTransport) requeueExpired(sess *boardsSession) {
 	for _, out := range sess.expiredPending(time.Now(), boardsAckTimeout) {
+		if out.drop != nil {
+			// A drop nobody acknowledged is not resent: it costs a full-size event
+			// and an object left on the board is clutter, not lost payload.
+			continue
+		}
 		if out.tries >= boardsMaxTries {
 			t.statDroppedDead.Add(1)
 			if utils.Throttled("boards.deadwrite", 30*time.Second) {
