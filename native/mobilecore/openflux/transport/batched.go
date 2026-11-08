@@ -115,7 +115,7 @@ func batchLingerMs(inner Transport) int {
 }
 
 func NewBatchedTransport(inner Transport) *BatchedTransport {
-	return &BatchedTransport{
+	b := &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
 		ctrl:          make(chan []byte, ctrlQueueDepth),
@@ -123,6 +123,15 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 		maxBatchBytes: batchBytes(inner),
 		maxBatchCount: envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount),
 	}
+	// One line per process, so a stand run can tell whether the env var it set is
+	// the value in force before blaming the carrier for the throughput.
+	quick := quickLingerMs
+	if b.lingerMs < quick {
+		quick = b.lingerMs
+	}
+	utils.Debugf("[BATCH] batch=%d bytes, linger=%d ms (small packets flush after %d ms), max %d packets",
+		b.maxBatchBytes, b.lingerMs, quick, b.maxBatchCount)
+	return b
 }
 
 func (b *BatchedTransport) Start() error {
