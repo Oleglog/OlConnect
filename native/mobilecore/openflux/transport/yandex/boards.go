@@ -59,15 +59,23 @@ const (
 
 	// boardsRate* pace the writes. The board refuses modify-objects with
 	// RATE_LIMITED when objects arrive too fast, and the exact budget is not
-	// documented (2026-11-08: tens of objects per second were refused while
-	// ~641 KB/s of payload still went through), so it is learned with AIMD
-	// rather than guessed: start at boardsRateStart, add boardsRateGrow per
-	// acknowledged object up to boardsRateMax, halve on RATE_LIMITED and keep
-	// the next slot back for boardsRateHold. The floor is low on purpose: at
-	// the floor a 48 KiB object still moves ~96 KB/s, degraded but alive.
+	// documented (2026-11-08: a 1 MiB transfer at ~50 objects/s went through at
+	// 641 KB/s, while a whole session of that rate was refused on its peaks). So
+	// the pace is learned with AIMD rather than guessed: start at
+	// boardsRateStart, add boardsRateGrow per acknowledged object up to
+	// boardsRateMax, halve on RATE_LIMITED and keep the next slot back for
+	// boardsRateHold. The floor is low on purpose: at the floor a 48 KiB object
+	// still moves ~96 KB/s, degraded but alive.
+	//
+	// boardsRateMax is a probe, not a measurement: v1.0.52 capped the pace at 18
+	// objects/s and never saw a refusal, which says only that 18 is below the
+	// board's budget. With objects filling to boardsBatchBytes a high ceiling
+	// costs nothing (the bytes per second are what the link pays for), and AIMD
+	// settles below it by itself where the board says RATE_LIMITED - so the log
+	// names the real budget.
 	boardsRateStart = 5.0
 	boardsRateMin   = 2.0
-	boardsRateMax   = 18.0
+	boardsRateMax   = 48.0
 	boardsRateGrow  = 0.5
 	boardsRateCut   = 0.5
 	boardsRateHold  = 250 * time.Millisecond
@@ -77,6 +85,14 @@ const (
 	// the first acknowledged object, so a refusal after a good object is held
 	// back by boardsRateHold again and recovery is not slowed down.
 	boardsRateHoldMax = time.Second
+
+	// boardsRateBytes is the same slot clock in bytes per second: an object is
+	// charged its own size, so the pace is "bytes per second" as long as the
+	// objects are full, and boardsRateMax guards the board's event budget. Twice
+	// the measured 641 KB/s carrier rate, so it does not bind in practice - it
+	// only stops a burst of full objects at the event ceiling from asking the
+	// board for ~2.3 MB/s.
+	boardsRateBytes = 1_500_000.0
 
 	// boardsMaxTries bounds a retry: a refusal that never clears must not pin
 	// one object in the writer forever.
@@ -93,10 +109,16 @@ const (
 	boardsMaxPending      = 200
 	boardsMaxPendingBytes = 2 << 20
 
-	// Deletions are coalesced: one drop-objects per window carrying every object
-	// that arrived in it. The old path spent one event per received object from
-	// the same per-second budget as the payload.
-	boardsDropWindow = 300 * time.Millisecond
+	// Deletions are coalesced into one drop-objects per window, and the window is
+	// long on purpose: the peer that sent an object and this side receive it from
+	// the same room, and deleting it the moment it arrives can take it away before
+	// the other peer's copy is read off the board. A second and a half is also
+	// what lets a burst of small objects share one event instead of costing one
+	// event each from the same budget as the payload.
+	boardsDropWindow = 1500 * time.Millisecond
+	// boardsDropQueueMax bounds the objects waiting for that window (~2 MiB of
+	// values): a saturated tunnel must not grow the drop queue without limit.
+	boardsDropQueueMax = 32
 	// boardsDropEventBytes caps the marshalled size of one drop-objects event.
 	// The board's measured ceiling is 48 KiB of decoded value per object, and a
 	// drop echoes the value it received, so one full-size object already fills
@@ -142,9 +164,12 @@ func (p *boardsPacer) currentRate() float64 {
 	return p.rate
 }
 
-// reserve claims the next write slot and returns how long the caller has to
-// wait before writing.
-func (p *boardsPacer) reserve() time.Duration {
+// reserve claims the next write slot for an object of size bytes and returns how
+// long the caller has to wait before writing. A slot costs one object of the
+// event budget and the object's own bytes of the byte budget, so a full object is
+// what buys throughput: 48 KiB at 13/s is the measured 641 KB/s, 1.6 KiB objects
+// at the same 13/s were the 20 KB/s of v1.0.52.
+func (p *boardsPacer) reserve(size int) time.Duration {
 	now := p.clock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -155,16 +180,19 @@ func (p *boardsPacer) reserve() time.Duration {
 		p.next = now
 	}
 	at := p.next
-	p.next = at.Add(p.intervalLocked())
+	p.next = at.Add(p.intervalLocked(size))
 	return at.Sub(now)
 }
 
-func (p *boardsPacer) intervalLocked() time.Duration {
+func (p *boardsPacer) intervalLocked(size int) time.Duration {
 	rate := p.rate
 	if rate <= 0 {
 		rate = boardsRateStart
 	}
 	d := time.Duration(float64(time.Second) / rate)
+	if byBytes := time.Duration(float64(size) / boardsRateBytes * float64(time.Second)); byBytes > d {
+		d = byBytes
+	}
 	if d < time.Millisecond {
 		d = time.Millisecond
 	}
@@ -254,9 +282,10 @@ type boardsSession struct {
 
 	// dropList coalesces the objects the peer sent into one drop-objects event
 	// per window; each of those events costs the same budget as a payload write.
-	dropList []map[string]interface{}
-	dropMu   sync.Mutex
-	dropCh   chan struct{}
+	dropList    []map[string]interface{}
+	dropMu      sync.Mutex
+	dropCh      chan struct{}
+	dropSkipped atomic.Int64
 
 	// stop is closed when this connection's serve loop ends: the writer, dropper
 	// and stats goroutines belong to one socket and must not outlive it.
@@ -397,13 +426,19 @@ func (s *boardsSession) takeRetry() (boardsOutgoing, bool) {
 }
 
 // queueDrops hands the peer's objects to the coalescer: one drop-objects per
-// window answers many server-modify-objects events.
+// window answers many server-modify-objects events. The queue is bounded, so a
+// tunnel that never leaves the data path idle cannot grow it without limit; the
+// discarded entries are clutter on the board, not lost payload, and are counted.
 func (s *boardsSession) queueDrops(objects []map[string]interface{}) {
 	if len(objects) == 0 {
 		return
 	}
 	s.dropMu.Lock()
 	s.dropList = append(s.dropList, objects...)
+	for len(s.dropList) > boardsDropQueueMax {
+		s.dropList = s.dropList[1:]
+		s.dropSkipped.Add(1)
+	}
 	s.dropMu.Unlock()
 	select {
 	case s.dropCh <- struct{}{}:
@@ -545,6 +580,7 @@ type BoardsTransport struct {
 	// a key mismatch between the peers, and one merged counter would hide which
 	// of the two is happening.
 	statSent        atomic.Int64 // payload writes the board acknowledged
+	statSentBytes   atomic.Int64 // payload bytes in those writes
 	statDropEvents  atomic.Int64 // drop-objects events sent
 	statRetried     atomic.Int64 // refused writes put back in the queue
 	statRefused     atomic.Int64 // RATE_LIMITED acks
@@ -579,13 +615,17 @@ func (t *BoardsTransport) SetErrorNotifier(fn func(err error, transportName, url
 // the cap and lose the whole batch to PAYLOAD_TOO_LARGE.
 func (t *BoardsTransport) PreferredBatchBytes() int { return boardsBatchBytes }
 
-// PreferredBatchLingerMs widens the coalescing window: one board message costs
-// a round trip (measured 0.07-0.17 s on the board's own shard) and, more
-// importantly, a slot in the board's per-second budget. At 20 ms a browsing
-// tunnel wrote ~50 objects a second, each one a chance to be answered
-// RATE_LIMITED; 100 ms turns the same bytes into fewer, fuller objects. The byte
-// ceiling (boardsBatchBytes) is unchanged: it is the board's own limit.
-func (t *BoardsTransport) PreferredBatchLingerMs() int { return 100 }
+// PreferredBatchLingerMs is the batch deadline, and it decides the throughput:
+// the coalescing layer flushes at boardsBatchBytes or after this long, so the
+// object size is roughly (carrier bytes/s x linger) and the carrier is only as
+// fast as objects/s x object size. v1.0.52 paired a 18/s pace with a 100 ms
+// deadline: 18 x 0.1 = 1.8, so a busy writer consumed batches slightly faster
+// than they could fill, objects stayed at 1.6 KiB and the tunnel collapsed to
+// 20 KB/s. 300 ms with the 48/s ceiling makes the same product 14: batches fill
+// to boardsBatchBytes and the carrier rate is set by the link again. The price is
+// latency, which is why this is a deadline and not a delay: a full batch leaves
+// immediately. OPENFLUX_BATCH_LINGER_MS overrides this per run.
+func (t *BoardsTransport) PreferredBatchLingerMs() int { return 300 }
 
 func (t *BoardsTransport) Start() error {
 	if err := t.BaseTransport.Start(); err != nil {
@@ -1136,6 +1176,7 @@ func (t *BoardsTransport) handleAck(sess *boardsSession, raw []byte) {
 			t.statDropEvents.Add(1)
 		} else {
 			t.statSent.Add(1)
+			t.statSentBytes.Add(int64(len(out.pkt)))
 		}
 		t.noteRate(t.pacer.onSuccess(), "")
 		return
@@ -1477,7 +1518,7 @@ func (t *BoardsTransport) writerLoop(sess *boardsSession) {
 // object. The pace is a slot clock (boardsPacer), not a sleep per packet: while
 // the queue is busy the wait is whatever is left of the interval.
 func (t *BoardsTransport) writeObject(sess *boardsSession, out boardsOutgoing) {
-	if !t.waitSlot() {
+	if !t.waitSlot(len(out.pkt)) {
 		return
 	}
 	if err := t.sendObject(sess, out); err != nil {
@@ -1490,10 +1531,10 @@ func (t *BoardsTransport) writeObject(sess *boardsSession, out boardsOutgoing) {
 	}
 }
 
-// waitSlot blocks until the next place in the board's write budget is ours.
-// False means the transport is closing.
-func (t *BoardsTransport) waitSlot() bool {
-	d := t.pacer.reserve()
+// waitSlot blocks until the next place in the board's write budget for an object
+// of size bytes is ours. False means the transport is closing.
+func (t *BoardsTransport) waitSlot(size int) bool {
+	d := t.pacer.reserve(size)
 	if d <= 0 {
 		return true
 	}
@@ -1551,9 +1592,9 @@ func buildDropObjects(objects []map[string]interface{}, participant string) map[
 }
 
 // dropLoop turns a burst of received objects into one drop-objects event per
-// window. Each server-modify-objects used to spawn its own goroutine with a
-// 100 ms sleep, so every received object cost its own event from the same
-// per-second budget as the payload that carries user traffic.
+// window, and only while the data path has nothing waiting: a delete costs one
+// event slot and a full object of bytes, exactly like a payload write, and the
+// payload is what the user is waiting for.
 func (t *BoardsTransport) dropLoop(sess *boardsSession) {
 	for {
 		select {
@@ -1563,20 +1604,21 @@ func (t *BoardsTransport) dropLoop(sess *boardsSession) {
 			return
 		case <-sess.dropCh:
 		}
-		// Wait the window out so a burst becomes one event.
-		select {
-		case <-t.done:
+		// Wait the window out: a burst becomes one event, and the peer has
+		// certainly read the object off the board before it is deleted.
+		if !sleepBoards(t, sess, boardsDropWindow) {
 			return
-		case <-sess.stop:
-			return
-		case <-time.After(boardsDropWindow):
 		}
 		for {
 			event, ok := sess.takeDrops(*sess.participant.Load())
 			if !ok {
 				break
 			}
-			if !t.waitSlot() {
+			// Yield to payload writes that are waiting for the same budget.
+			if !t.waitDataIdle(sess, boardsDropWindow) {
+				return
+			}
+			if !t.waitSlot(dropEventBytes(event)) {
 				return
 			}
 			if err := t.sendObject(sess, boardsOutgoing{drop: event}); err != nil {
@@ -1584,6 +1626,41 @@ func (t *BoardsTransport) dropLoop(sess *boardsSession) {
 				return
 			}
 		}
+	}
+}
+
+// waitDataIdle blocks until no payload write is queued, or until limit passes: a
+// saturated tunnel still gets its housekeeping done, it just gets it last.
+func (t *BoardsTransport) waitDataIdle(sess *boardsSession, limit time.Duration) bool {
+	deadline := time.NewTimer(limit)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for len(sess.Queue) > 0 {
+		select {
+		case <-t.done:
+			return false
+		case <-sess.stop:
+			return false
+		case <-deadline.C:
+			return true
+		case <-tick.C:
+		}
+	}
+	return true
+}
+
+// sleepBoards waits d, returning false when this connection is going away.
+func sleepBoards(t *BoardsTransport, sess *boardsSession, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-t.done:
+		return false
+	case <-sess.stop:
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -1700,11 +1777,17 @@ func (t *BoardsTransport) statsLoop(sess *boardsSession) {
 		case <-tick.C:
 		}
 		t.requeueExpired(sess)
-		utils.Debugf("[BOARDS] write rate=%.1f/s sent=%d retried=%d refused=%d too_large=%d key_mismatch=%d dropped_dead=%d overload=%d drops=%d queue=%d pending=%d/%dKiB",
-			t.pacer.currentRate(), t.statSent.Load(), t.statRetried.Load(), t.statRefused.Load(),
+		// avg is the object size the pace is buying: v1.0.52 wrote 1.6 KiB objects
+		// at 18/s (20 KB/s), a full object is 48 KiB (up to 641 KB/s at 13/s).
+		avg := int64(0)
+		if sent := t.statSent.Load(); sent > 0 {
+			avg = t.statSentBytes.Load() / sent
+		}
+		utils.Debugf("[BOARDS] write rate=%.1f/s avg=%dB sent=%d retried=%d refused=%d too_large=%d key_mismatch=%d dropped_dead=%d overload=%d drops=%d drop_skipped=%d queue=%d pending=%d/%dKiB",
+			t.pacer.currentRate(), avg, t.statSent.Load(), t.statRetried.Load(), t.statRefused.Load(),
 			t.statTooLarge.Load(), t.statKeyMismatch.Load(), t.statDroppedDead.Load(),
-			t.statOverload.Load(), t.statDropEvents.Load(), len(sess.Queue),
-			sess.pendingCount(), sess.pendingByteCount()/1024)
+			t.statOverload.Load(), t.statDropEvents.Load(), sess.dropSkipped.Load(),
+			len(sess.Queue), sess.pendingCount(), sess.pendingByteCount()/1024)
 	}
 }
 
