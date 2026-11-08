@@ -34,6 +34,8 @@ func (h *hintCarrier) Stop() error {
 
 func (h *hintCarrier) IsConnected() bool { return true }
 
+func (h *hintCarrier) Stats() TransportStats { return TransportStats{} }
+
 func (h *hintCarrier) PreferredBatchBytes() int { return 48000 }
 
 func (h *hintCarrier) PreferredBatchLingerMs() int { return 300 }
@@ -96,3 +98,4 @@ func (h *hintlessCarrier) Receive(cb func([]byte)) { h.inner.Receive(cb) }
 func (h *hintlessCarrier) Start() error            { return nil }
 func (h *hintlessCarrier) Stop() error             { return nil }
 func (h *hintlessCarrier) IsConnected() bool       { return true }
+func (h *hintlessCarrier) Stats() TransportStats    { return TransportStats{} }
