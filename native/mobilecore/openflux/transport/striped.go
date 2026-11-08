@@ -86,6 +86,11 @@ type StripedTransport struct {
 	// retransmissions are held then: holding new data as well left both sides
 	// with nothing to ack, a mutual mute.
 	peerSilent atomic.Bool
+
+	// refusalSeen[i] is the last refusal count seen on lane i, and rtxGrowAt
+	// paces walking the retransmission allowance back up.
+	refusalSeen [maxStripeLanes]uint64
+	rtxGrowAt   time.Time
 }
 
 const maxStripeLanes = 64
@@ -149,6 +154,13 @@ type LossReporter interface {
 // rejoins its rooms then, instead of writing into rooms nobody sits in.
 type SilenceSignaler interface {
 	PeerSilentFor(silentFor time.Duration, inflight int)
+}
+
+// RefusalReporter is implemented by lanes whose relay refuses writes (Cups
+// answers 429 when a room gets too many events a second). The delta tells the
+// stripe to spend fewer retransmissions - a refused write is not a lost one.
+type RefusalReporter interface {
+	WriteRefusals() uint64
 }
 
 // Wire formats. The first byte tells them apart from each other and from the
@@ -691,6 +703,29 @@ func (s *StripedTransport) silenceLoop() {
 			return
 		case now = <-t.C:
 		}
+		// A relay that refuses writes (Cups answers 429) is spending its budget
+		// on us: retransmissions come down first, and only then does the pacer
+		// in the carrier slow the writes themselves.
+		lanesNow, _ := s.snapshotLanes()
+		refusedNow := false
+		for i, l := range lanesNow {
+			rr, ok := l.(RefusalReporter)
+			if !ok || i >= maxStripeLanes {
+				continue
+			}
+			if n := rr.WriteRefusals(); n > s.refusalSeen[i] {
+				s.refusalSeen[i] = n
+				refusedNow = true
+			}
+		}
+		switch {
+		case refusedNow:
+			s.snd.cutRtx()
+			s.rtxGrowAt = now
+		case now.Sub(s.rtxGrowAt) > 2*time.Second:
+			s.snd.growRtx()
+			s.rtxGrowAt = now
+		}
 		acks := s.ackRecv.Load()
 		del, _, _, _, _ := s.ro.snapshot()
 		if acks != lastAck || del != lastDel {
@@ -961,6 +996,9 @@ type sender struct {
 	rtxAt     time.Time
 	holdUntil time.Time
 	holds     uint64
+	// rtxScale is the AIMD share of the retransmission allowance: a relay that
+	// refuses writes should cost retransmissions first, new data second.
+	rtxScale float64
 
 	pieceBytes  int  // max payload bytes per piece (defaults to stripePieceBytes)
 	noOrderLoss bool // when true, disable single-lane FIFO out-of-order loss inference
@@ -996,6 +1034,7 @@ func (q *sender) init() {
 	q.seq = mrand.Uint32()
 	q.low = q.seq + 1
 	q.pieceBytes = stripePieceBytes
+	q.rtxScale = 1
 }
 
 func (q *sender) maxPieceBytes() int {
@@ -1470,11 +1509,26 @@ func (q *sender) refillRtx(now time.Time) {
 		q.rtxAt, q.rtxBudget = now, rtxBurst
 		return
 	}
-	q.rtxBudget += now.Sub(q.rtxAt).Seconds() * rtxPerSec
+	q.rtxBudget += now.Sub(q.rtxAt).Seconds() * rtxPerSec * q.rtxScale
 	if q.rtxBudget > rtxBurst {
 		q.rtxBudget = rtxBurst
 	}
 	q.rtxAt = now
+}
+
+// cutRtx halves the retransmission allowance: when the relay refuses writes,
+// retransmissions are what it should spend first, not fresh data.
+func (q *sender) cutRtx() {
+	q.mu.Lock()
+	q.rtxScale = math.Max(q.rtxScale/2, 0.125)
+	q.mu.Unlock()
+}
+
+// growRtx walks the allowance back up after the refusals stop.
+func (q *sender) growRtx() {
+	q.mu.Lock()
+	q.rtxScale = math.Min(q.rtxScale*1.25, 1)
+	q.mu.Unlock()
 }
 
 // inflightPieces is how many pieces wait for an ack.
