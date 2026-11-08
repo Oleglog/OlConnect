@@ -652,7 +652,7 @@ class ConnectionFragment : Fragment() {
             )
             addView(TextView(requireContext()).apply {
                 setText(R.string.add_connection)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleLarge)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_TitleLarge)
                 setPadding(0, 0, 0, dimen(R.dimen.space_4))
             })
             addView(
@@ -735,11 +735,11 @@ class ConnectionFragment : Fragment() {
                 orientation = LinearLayout.VERTICAL
                 addView(TextView(requireContext()).apply {
                     setText(titleRes)
-                    setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
+                    setTextAppearance(R.style.TextAppearance_Olcrtc_TitleMedium)
                 })
                 addView(TextView(requireContext()).apply {
                     setText(descriptionRes)
-                    setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+                    setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
                     setTextColor(resolveColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
                 }, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,

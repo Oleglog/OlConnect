@@ -25,7 +25,7 @@
             android:text="@string/navigation_settings"
             android:textAppearance="@style/TextAppearance.Olcrtc.TitleLarge" />
 
-        <!-- Оформление ------------------------------------------------------ -->
+        <!-- Оформление: палитра, акценты и системные эффекты. -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -123,7 +123,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Туннель --------------------------------------------------------- -->
+        <!-- Туннель: маршрут, приложения, DNS и два переключателя. -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -328,7 +328,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Служебное ------------------------------------------------------- -->
+        <!-- Служебное: обновления, диагностика, о приложении. -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

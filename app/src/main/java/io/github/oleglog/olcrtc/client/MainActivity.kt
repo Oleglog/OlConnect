@@ -459,7 +459,7 @@ class MainActivity : AppCompatActivity() {
         }
         val progressText = android.widget.TextView(this).apply {
             setText(R.string.settings_update_downloading)
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+            setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
         }
         val progressContent = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL

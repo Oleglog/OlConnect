@@ -215,7 +215,7 @@ class SettingsFragment : Fragment() {
         var selectedPreset = current.preset
 
         val presetSummary = TextView(requireContext()).apply {
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
         }
         fun updatePresetSummary() {
             presetSummary.setText(
@@ -266,7 +266,7 @@ class SettingsFragment : Fragment() {
             setPadding(24.dp, 8.dp, 24.dp, 0)
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_routing_preset)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_TitleSmall)
                 setPadding(0, 0, 0, 8.dp)
             })
             addView(presetGroup)
@@ -280,7 +280,7 @@ class SettingsFragment : Fragment() {
             ).apply { topMargin = 12.dp })
             addView(TextView(requireContext()).apply {
                 setText(R.string.allow_lan_description)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
             })
             addView(MaterialButton(requireContext()).apply {
                 setText(R.string.settings_manage_rules)
@@ -360,11 +360,11 @@ class SettingsFragment : Fragment() {
         setPadding(0, 10.dp, 0, 10.dp)
         addView(TextView(requireContext()).apply {
             text = "${routingActionLabel(rule.action)} · ${routingTypeLabel(rule.matchType)}"
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
+            setTextAppearance(R.style.TextAppearance_Olcrtc_TitleSmall)
         })
         addView(TextView(requireContext()).apply {
             text = rule.value
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+            setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
         })
         addView(LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -461,7 +461,7 @@ class SettingsFragment : Fragment() {
             setPadding(24.dp, 8.dp, 24.dp, 0)
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_updates_description)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
                 setPadding(0, 0, 0, 12.dp)
             })
             addView(MaterialSwitch(requireContext()).apply {
@@ -475,7 +475,7 @@ class SettingsFragment : Fragment() {
             })
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_auto_subscription_refresh_description)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
             })
         }
         showActions(
@@ -503,7 +503,7 @@ class SettingsFragment : Fragment() {
             message?.let {
                 addView(TextView(requireContext()).apply {
                     text = it
-                    setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+                    setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
                     setPadding(0, 0, 0, 8.dp)
                 })
             }
@@ -590,7 +590,7 @@ class SettingsFragment : Fragment() {
             setPadding(24.dp, 8.dp, 24.dp, 0)
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_routing_rule_hint)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
                 setPadding(0, 0, 0, 8.dp)
             })
             addView(actionButton)
@@ -749,7 +749,7 @@ class SettingsFragment : Fragment() {
                 Formatter.formatShortFileSize(requireContext(), selectedAsset.size),
                 if (selectedAsset == recommended) getString(R.string.settings_update_recommended_suffix) else "",
             )
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
         }
         val buttonAssets = mutableMapOf<Int, GitHubRelease.ReleaseAsset>()
         val tabs = MaterialButtonToggleGroup(requireContext()).apply {
@@ -888,11 +888,11 @@ class SettingsFragment : Fragment() {
             addView(TextView(requireContext()).apply {
                 text = summary
                 setTextIsSelectable(true)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
             })
             addView(TextView(requireContext()).apply {
                 text = getString(R.string.settings_diagnostics_description)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
                 setTextColor(
                     com.google.android.material.color.MaterialColors.getColor(
                         this,

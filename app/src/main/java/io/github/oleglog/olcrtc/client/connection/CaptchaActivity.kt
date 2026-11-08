@@ -144,7 +144,7 @@ internal class CaptchaActivity : ComponentActivity() {
         header.addView(
             TextView(this).apply {
                 setText(R.string.captcha_sheet_title)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_TitleMedium)
             },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
