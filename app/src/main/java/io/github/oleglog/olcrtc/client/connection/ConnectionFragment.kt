@@ -9,6 +9,7 @@ import android.net.Network
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.format.Formatter
 import android.util.TypedValue
 import android.view.Gravity
@@ -24,7 +25,6 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.AppCompatImageButton
 import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.ColorUtils
 import androidx.core.view.ViewCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -56,6 +56,12 @@ import io.github.oleglog.olcrtc.client.profile.orderProfiles
 import io.github.oleglog.olcrtc.client.profile.ProfileUri
 import io.github.oleglog.olcrtc.client.routing.RoutingSettings
 import io.github.oleglog.olcrtc.client.statistics.ConnectionSessionRepository
+import io.github.oleglog.olcrtc.client.statistics.MINUTE_MILLIS
+import io.github.oleglog.olcrtc.client.statistics.RailCode
+import io.github.oleglog.olcrtc.client.statistics.RailSession
+import io.github.oleglog.olcrtc.client.statistics.SessionRailStore
+import io.github.oleglog.olcrtc.client.statistics.mergeRail
+import io.github.oleglog.olcrtc.client.statistics.railSlots
 import io.github.oleglog.olcrtc.client.subscription.SubscriptionRefresher
 import io.github.oleglog.olcrtc.client.vpn.ConnectionStage
 import io.github.oleglog.olcrtc.client.vpn.ProfileLatencyProbe
@@ -72,6 +78,7 @@ class ConnectionFragment : Fragment() {
     private val settings by lazy { RoutingSettings.open(requireContext().applicationContext) }
     private val statistics by lazy { ConnectionSessionRepository.open(requireContext().applicationContext) }
     private val diagnostics by lazy { DiagnosticsLogStore.open(requireContext().applicationContext) }
+    private val railStore by lazy { SessionRailStore(requireContext().applicationContext) }
     private val connectivity by lazy { requireContext().getSystemService(ConnectivityManager::class.java) }
     private val storage = Executors.newSingleThreadExecutor()
     private val latency = Executors.newSingleThreadExecutor()
@@ -103,6 +110,15 @@ class ConnectionFragment : Fragment() {
     private var currentSessionStartedAt: Long? = null
     private var todayBytesUp = 0L
     private var todayBytesDown = 0L
+    // The last hour, as the service persisted it: the rail is rebuilt from these
+    // so it survives an app restart even though the screen only writes the ring.
+    private var recentSessions: List<RailSession> = emptyList()
+    private var railRecordedMinute = -1L
+    // One-second speed sample: the byte counters are cumulative, so the rate is
+    // the delta since the previous tick, which is what the tile shows.
+    private var speedSampleAt = 0L
+    private var speedSampleBytes = 0L
+    private var currentDownSpeed = 0L
     @Volatile private var dashboardLoadInFlight = false
     private val dashboardTicker = object : Runnable {
         override fun run() {
@@ -318,6 +334,7 @@ class ConnectionFragment : Fragment() {
                         connectionContentState(loading = false, hasProfiles = hasProfiles, failed = false),
                     )
                     updateActionAvailability()
+                    updateInfoTile()
                 }.onFailure { error ->
                     if (profilesLoaded && connectionAdapter.itemCount > 0) {
                         showStatus(error.message ?: getString(R.string.connection_error_message))
@@ -404,48 +421,15 @@ class ConnectionFragment : Fragment() {
             selected = isReferenceSelected(item.reference),
             connected = isReferenceConnected(item.reference),
         )
-        card.strokeColor = if (state == ConnectionCardState.INACTIVE) {
-            resolveColor(com.google.android.material.R.attr.colorOutline)
-        } else {
-            resolveColor(androidx.appcompat.R.attr.colorPrimary)
-        }
-        card.strokeWidth = when (state) {
-            ConnectionCardState.CONNECTED -> dimen(R.dimen.card_border_active)
-            ConnectionCardState.SELECTED, ConnectionCardState.INACTIVE -> dimen(R.dimen.card_border)
-        }
-        animateCardElevation(card, when (state) {
-            ConnectionCardState.CONNECTED -> dimen(R.dimen.card_elevation_connected).toFloat()
-            ConnectionCardState.SELECTED -> dimen(R.dimen.card_elevation_selected).toFloat()
-            ConnectionCardState.INACTIVE -> 0f
-        })
-        card.alpha = 1f
-        card.setCardBackgroundColor(
-            ColorUtils.blendARGB(
-                resolveColor(com.google.android.material.R.attr.colorSurfaceContainer),
-                resolveColor(androidx.appcompat.R.attr.colorPrimary),
-                when (state) {
-                    ConnectionCardState.CONNECTED -> 0.18f
-                    ConnectionCardState.SELECTED -> 0.10f
-                    ConnectionCardState.INACTIVE -> 0f
-                },
-            ),
-        )
+        // A row, not a card: the active one is marked by a 2 px rule and a word,
+        // never by a fill (design-system §11).
+        card.strokeWidth = 0
+        card.cardElevation = 0f
+        card.setCardBackgroundColor(android.graphics.Color.TRANSPARENT)
+        views.profileRule.isVisible = state != ConnectionCardState.INACTIVE
         card.isSelected = state != ConnectionCardState.INACTIVE
         card.isActivated = state == ConnectionCardState.CONNECTED
         updateCardContent(views, item, state)
-    }
-
-    private fun animateCardElevation(card: MaterialCardView, targetElevation: Float) {
-        if (!animationsEnabled()) {
-            card.cardElevation = targetElevation
-            return
-        }
-        val start = card.cardElevation
-        if (start == targetElevation) return
-        android.animation.ValueAnimator.ofFloat(start, targetElevation).apply {
-            duration = 150L
-            addUpdateListener { card.cardElevation = it.animatedValue as Float }
-        }.start()
     }
 
     private fun resolveColor(attribute: Int): Int {
@@ -529,6 +513,7 @@ class ConnectionFragment : Fragment() {
         showStatus(null)
         updateConnectButtonText()
         updateActionAvailability()
+        updateInfoTile()
         refreshCardAppearance()
     }
 
@@ -539,6 +524,7 @@ class ConnectionFragment : Fragment() {
         showStatus(null)
         updateConnectButtonText()
         updateActionAvailability()
+        updateInfoTile()
         refreshCardAppearance()
     }
 
@@ -841,12 +827,8 @@ class ConnectionFragment : Fragment() {
             }
             else -> {}
         }
-        binding.connectionSummary.text = if (state == VpnState.CONNECTED) {
-            getString(R.string.connection_protected)
-        } else {
-            vpnStateText(state, stage, reconnectAttempt)
-        }
-        binding.connectionStatusDot.alpha = if (state == VpnState.CONNECTED) 1f else 0.45f
+        applyStateWord(state)
+        binding.connectionStage.text = vpnStateText(state, stage, reconnectAttempt)
         showStatus(error ?: if (state == VpnState.ERROR) getString(R.string.vpn_notification_error) else null)
         if (stateChanged && state == VpnState.ERROR) {
             activityHost.pendingCaptchaUrl()?.let(::offerCaptcha)
@@ -856,27 +838,54 @@ class ConnectionFragment : Fragment() {
         updateConnectPulse()
         updateActionAvailability()
         updateLatencyAction()
+        updateInfoTile()
         updateDashboard()
         refreshCardAppearance()
     }
 
+    /**
+     * The design's vocabulary, not a status pill: a word with a 2 px rule whose
+     * colour is the state. Same five words the panel uses.
+     */
+    private fun applyStateWord(state: VpnState) {
+        binding.connectionSummary.setText(stateWord(state))
+        binding.connectionStatusDot.backgroundTintList =
+            ColorStateList.valueOf(requireContext().getColor(stateColor(state)))
+    }
+
+    private fun stateWord(state: VpnState): Int = when (state) {
+        VpnState.CONNECTED -> R.string.vpn_state_live
+        VpnState.RECONNECTING -> R.string.vpn_state_degraded
+        VpnState.ERROR -> R.string.vpn_state_down
+        VpnState.PREPARING, VpnState.CONNECTING -> R.string.vpn_state_connecting
+        VpnState.STOPPING, VpnState.DISCONNECTED, VpnState.NO_PROFILE -> R.string.vpn_state_stopped
+    }
+
+    private fun stateColor(state: VpnState): Int = when (state) {
+        VpnState.CONNECTED -> R.color.state_live
+        VpnState.RECONNECTING -> R.color.state_degraded
+        VpnState.ERROR -> R.color.state_down
+        VpnState.PREPARING, VpnState.CONNECTING -> R.color.state_warn
+        VpnState.STOPPING, VpnState.DISCONNECTED, VpnState.NO_PROFILE -> R.color.state_idle
+    }
+
     private fun setConnectButtonText(text: CharSequence) {
         if (_binding == null) return
-        val title = binding.connectTitle
-        binding.connect.contentDescription = text
-        if (title.text == text) return
+        val button = binding.connect
+        button.contentDescription = text
+        if (button.text == text) return
         if (!animationsEnabled()) {
-            title.text = text
+            button.text = text
             return
         }
-        title.animate().cancel()
-        title.animate()
+        button.animate().cancel()
+        button.animate()
             .alpha(0f)
             .setDuration(100L)
             .withEndAction {
-                title.text = text
-                title.animate().cancel()
-                title.animate().alpha(1f).setDuration(120L).start()
+                button.text = text
+                button.animate().cancel()
+                button.animate().alpha(1f).setDuration(120L).start()
             }
             .start()
     }
@@ -893,7 +902,35 @@ class ConnectionFragment : Fragment() {
             },
         )
         setConnectButtonText(text)
+        applyConnectButtonStyle()
     }
+
+    /**
+     * One action, two states: the accent fills it while the tunnel is down (this
+     * is the thing to do), the danger outline takes over while it runs, so the
+     * primary colour never means "danger" and never competes with the state.
+     */
+    private fun applyConnectButtonStyle() {
+        if (_binding == null) return
+        val button = binding.connect
+        val running = currentState in ACTIVE_SESSION_STATES
+        if (running) {
+            val danger = requireContext().getColor(R.color.state_down)
+            button.backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+            button.strokeWidth = dimensionPx(R.dimen.card_border)
+            button.strokeColor = ColorStateList.valueOf(danger)
+            button.setTextColor(danger)
+            button.iconTint = ColorStateList.valueOf(danger)
+        } else {
+            button.backgroundTintList = ColorStateList.valueOf(resolveColor(androidx.appcompat.R.attr.colorPrimary))
+            button.strokeWidth = 0
+            button.strokeColor = ColorStateList.valueOf(Color.TRANSPARENT)
+            button.setTextColor(resolveColor(com.google.android.material.R.attr.colorOnPrimary))
+            button.iconTint = ColorStateList.valueOf(resolveColor(com.google.android.material.R.attr.colorOnPrimary))
+        }
+    }
+
+    private fun dimensionPx(resource: Int): Int = resources.getDimensionPixelSize(resource)
 
     private fun hasPendingProfileSwitch(): Boolean =
         selectedProfileId != null && selectedProfileId != connectedProfileId ||
@@ -1062,6 +1099,9 @@ class ConnectionFragment : Fragment() {
                     currentSessionStartedAt = summary.current?.startedAt
                     todayBytesUp = summary.today.bytesUp
                     todayBytesDown = summary.today.bytesDown
+                    // The hour is rebuilt from what the service persisted, so the
+                    // rail survives restarts and covers the time the screen was off.
+                    recentSessions = summary.recent.map { RailSession(it.startedAt, it.endedAt) }
                     updateDashboard()
                 }
             }
@@ -1074,37 +1114,124 @@ class ConnectionFragment : Fragment() {
         val sessionActive = currentSessionStartedAt != null && currentState in ACTIVE_SESSION_STATES
         val liveUp = if (sessionActive) traffic?.get(0)?.coerceAtLeast(0) ?: 0 else 0
         val liveDown = if (sessionActive) traffic?.get(1)?.coerceAtLeast(0) ?: 0 else 0
-        val upSpeed = if (currentState == VpnState.CONNECTED) traffic?.get(2)?.coerceAtLeast(0) ?: 0 else 0
-        val downSpeed = if (currentState == VpnState.CONNECTED) traffic?.get(3)?.coerceAtLeast(0) ?: 0 else 0
+        val upSpeed = traffic?.get(2)?.coerceAtLeast(0) ?: 0
+        val downSpeed = traffic?.get(3)?.coerceAtLeast(0) ?: 0
         binding.todayDownload.text = getString(R.string.traffic_rate_format, formatBytes(downSpeed))
         binding.todayUpload.text = getString(R.string.traffic_rate_format, formatBytes(upSpeed))
         binding.todayTotal.text = formatBytes(todayBytesUp + todayBytesDown + liveUp + liveDown)
+        binding.connectionRate.text = formatBytes(currentRatePerSecond(traffic))
+        binding.connectionReceived.text = formatBytes(todayBytesDown + liveDown)
+        binding.connectionLatency.text = lastLatencyMillis
+            ?.takeIf { lastLatencyReference == selectedReference() }
+            ?.let { getString(R.string.connection_latency_value, it) }
+            ?: getString(R.string.connection_latency_empty)
         binding.connectionTimer.text = currentSessionStartedAt
             ?.takeIf { sessionActive }
-            ?.let { formatDuration(System.currentTimeMillis() - it) }
+            ?.let { formatUptime(System.currentTimeMillis() - it) }
             ?: if (currentState in BUSY_STATES || currentState in ACTIVE_SESSION_STATES) {
                 getString(R.string.connection_timer_zero)
             } else {
                 getString(R.string.connection_tap_to_start)
             }
+        updateRail()
+    }
+
+    /**
+     * The received bytes are cumulative, so the rate on the tile is the delta
+     * since the previous one-second tick of the dashboard ticker — the same
+     * counters the service already keeps for the traffic row, sampled here.
+     */
+    private fun currentRatePerSecond(traffic: LongArray?): Long {
+        if (currentState != VpnState.CONNECTED) {
+            speedSampleAt = 0L
+            speedSampleBytes = 0L
+            currentDownSpeed = 0L
+            return 0L
+        }
+        val now = SystemClock.elapsedRealtime()
+        val downBytes = traffic?.get(1)?.coerceAtLeast(0) ?: 0L
+        val elapsed = now - speedSampleAt
+        val previous = speedSampleBytes
+        speedSampleAt = now
+        speedSampleBytes = downBytes
+        currentDownSpeed = if (previous > 0 && elapsed in 250..3_000 && downBytes >= previous) {
+            (downBytes - previous) * 1_000 / elapsed
+        } else {
+            0L
+        }
+        return currentDownSpeed
+    }
+
+    /**
+     * The rail: one slot per minute of the last hour. The screen records the
+     * minute it watched itself; the rest of the hour is reconstructed from the
+     * sessions the service wrote, including while the app was closed.
+     */
+    private fun updateRail() {
+        if (_binding == null) return
+        val now = System.currentTimeMillis()
+        val minute = now - Math.floorMod(now, MINUTE_MILLIS)
+        if (minute != railRecordedMinute) {
+            railRecordedMinute = minute
+            railCodeForState(currentState)?.let { railStore.record(it, now) }
+        }
+        val codes = mergeRail(railStore.read(now), railSlots(recentSessions, now))
+        binding.sessionRail.setCodes(codes)
+        binding.sessionRail.contentDescription = describeRail(codes)
+    }
+
+    private fun railCodeForState(state: VpnState): RailCode? = when (state) {
+        VpnState.CONNECTED -> RailCode.LIVE
+        VpnState.RECONNECTING -> RailCode.DEGRADED
+        VpnState.ERROR -> RailCode.DOWN
+        VpnState.DISCONNECTED, VpnState.NO_PROFILE -> RailCode.STOPPED
+        VpnState.PREPARING, VpnState.CONNECTING, VpnState.STOPPING -> null
+    }
+
+    private fun describeRail(codes: List<RailCode>): String {
+        val parts = RailCode.entries.mapNotNull { code ->
+            val count = codes.count { it == code }
+            if (count == 0) null else "${getString(railLabel(code))} $count"
+        }
+        return getString(R.string.rail_content_description, parts.joinToString(", "))
+    }
+
+    private fun railLabel(code: RailCode): Int = when (code) {
+        RailCode.LIVE -> R.string.rail_label_live
+        RailCode.DEGRADED -> R.string.rail_label_degraded
+        RailCode.LIMIT -> R.string.rail_label_limit
+        RailCode.DOWN -> R.string.rail_label_down
+        RailCode.STOPPED -> R.string.rail_label_stopped
+        RailCode.NONE -> R.string.rail_label_none
+    }
+
+    /** The second tile: which profile runs and on which carrier. No invented route. */
+    private fun updateInfoTile() {
+        if (_binding == null) return
+        val item = connectionItems.firstOrNull { it.reference == selectedReference() }
+            ?: connectionItems.firstOrNull { it.reference == activityHost.activeProfileReference() }
+        val name = item?.name
+        binding.connectionChip.text = name.orEmpty()
+        binding.connectionChip.isVisible = !name.isNullOrBlank()
+        binding.infoProfile.text = name ?: getString(R.string.connection_info_empty)
+        binding.infoCarrier.text = item?.type ?: getString(R.string.connection_info_empty)
+    }
+
+    private fun formatUptime(durationMillis: Long): String {
+        val totalMinutes = durationMillis.coerceAtLeast(0) / MINUTE_MILLIS
+        val hours = totalMinutes / 60
+        val minutes = totalMinutes % 60
+        return if (hours > 0) {
+            getString(R.string.connection_duration_hours, hours, minutes)
+        } else {
+            getString(R.string.connection_duration_minutes, minutes)
+        }
     }
 
     private fun formatBytes(bytes: Long): String = Formatter.formatShortFileSize(
         requireContext(),
         bytes.coerceAtLeast(0),
     )
-
-    private fun formatDuration(durationMillis: Long): String {
-        val totalSeconds = durationMillis.coerceAtLeast(0) / 1_000
-        val hours = totalSeconds / 3_600
-        val minutes = totalSeconds % 3_600 / 60
-        val seconds = totalSeconds % 60
-        return if (hours > 0) {
-            String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
-        }
-    }
 
     private fun showStatus(message: CharSequence?) {
         val status = _binding?.status ?: return

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status rule: a 2 px bar beside the state word, tinted by the state.
+     It replaces the coloured dot, so a status is never a bare dot (design §2). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/olcrtc_ink_faint" />
+    <corners android:radius="1dp" />
+</shape>
