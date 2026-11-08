@@ -18,6 +18,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContract
@@ -27,7 +28,6 @@ import com.google.android.material.shape.CornerFamily
 import com.google.android.material.shape.ShapeAppearanceModel
 import io.github.oleglog.olcrtc.client.R
 import io.github.oleglog.olcrtc.client.diagnostics.DiagnosticsLogStore
-import io.github.oleglog.olcrtc.client.ui.showMessage
 
 /**
  * Passes a Yandex SmartCaptcha in place: a WebView card that slides over the
@@ -144,7 +144,7 @@ internal class CaptchaActivity : ComponentActivity() {
         header.addView(
             TextView(this).apply {
                 setText(R.string.captcha_sheet_title)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_TitleMedium)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
             },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
@@ -232,7 +232,7 @@ internal class CaptchaActivity : ComponentActivity() {
             // Keep the sheet open: closing with nothing is exactly the silent
             // dead end this screen exists to remove.
             log("finish($reason): jar is empty, staying open ${harvestLine(harvest)}")
-            showMessage(getString(R.string.captcha_harvest_empty))
+            Toast.makeText(this, R.string.captcha_harvest_empty, Toast.LENGTH_SHORT).show()
             return
         }
         log("finish($reason): ${harvestLine(harvest)}")

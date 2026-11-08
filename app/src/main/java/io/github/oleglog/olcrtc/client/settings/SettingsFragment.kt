@@ -102,32 +102,6 @@ class SettingsFragment : Fragment() {
         binding.settingsUpdatesSummary.text = getString(R.string.settings_version_summary, BuildConfig.VERSION_NAME)
         binding.settingsDiagnosticsSummary.setText(R.string.settings_diagnostics_row_summary)
         binding.settingsAboutSummary.text = getString(R.string.settings_version_summary, BuildConfig.VERSION_NAME)
-        // Issue #47: the tunnel toggles live in the "Туннель" group now. Same
-        // RoutingSettings calls the VPN screen used, so behaviour is unchanged.
-        binding.autoFailover.isChecked = settings.getAutoFailover()
-        binding.autoFailover.setOnCheckedChangeListener { button, checked ->
-            button.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-            persistTunnelToggle { settings.setAutoFailoverBlocking(checked) }
-        }
-        binding.udpRelay.isChecked = settings.getUdpRelay()
-        binding.udpRelay.setOnCheckedChangeListener { button, checked ->
-            button.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-            persistTunnelToggle { settings.setUdpRelayBlocking(checked) }
-        }
-    }
-
-    /** Writes a tunnel toggle off the main thread and names the failure if any. */
-    private fun persistTunnelToggle(save: () -> Unit) {
-        viewLifecycleOwner.lifecycleScope.launch {
-            val result = runCatching { withContext(Dispatchers.IO) { save() } }
-            result.onFailure { showStatus(it.message) }
-        }
-    }
-
-    private fun showStatus(message: String?) {
-        val status = _binding?.status ?: return
-        status.text = message
-        status.visibility = if (message.isNullOrBlank()) View.GONE else View.VISIBLE
     }
 
     override fun onStart() {
@@ -215,7 +189,7 @@ class SettingsFragment : Fragment() {
         var selectedPreset = current.preset
 
         val presetSummary = TextView(requireContext()).apply {
-            setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
         }
         fun updatePresetSummary() {
             presetSummary.setText(
@@ -266,7 +240,7 @@ class SettingsFragment : Fragment() {
             setPadding(24.dp, 8.dp, 24.dp, 0)
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_routing_preset)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_TitleSmall)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
                 setPadding(0, 0, 0, 8.dp)
             })
             addView(presetGroup)
@@ -280,7 +254,7 @@ class SettingsFragment : Fragment() {
             ).apply { topMargin = 12.dp })
             addView(TextView(requireContext()).apply {
                 setText(R.string.allow_lan_description)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
             })
             addView(MaterialButton(requireContext()).apply {
                 setText(R.string.settings_manage_rules)
@@ -360,11 +334,11 @@ class SettingsFragment : Fragment() {
         setPadding(0, 10.dp, 0, 10.dp)
         addView(TextView(requireContext()).apply {
             text = "${routingActionLabel(rule.action)} · ${routingTypeLabel(rule.matchType)}"
-            setTextAppearance(R.style.TextAppearance_Olcrtc_TitleSmall)
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleSmall)
         })
         addView(TextView(requireContext()).apply {
             text = rule.value
-            setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
         })
         addView(LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -461,7 +435,7 @@ class SettingsFragment : Fragment() {
             setPadding(24.dp, 8.dp, 24.dp, 0)
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_updates_description)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
                 setPadding(0, 0, 0, 12.dp)
             })
             addView(MaterialSwitch(requireContext()).apply {
@@ -475,7 +449,7 @@ class SettingsFragment : Fragment() {
             })
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_auto_subscription_refresh_description)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
             })
         }
         showActions(
@@ -503,7 +477,7 @@ class SettingsFragment : Fragment() {
             message?.let {
                 addView(TextView(requireContext()).apply {
                     text = it
-                    setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
+                    setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
                     setPadding(0, 0, 0, 8.dp)
                 })
             }
@@ -590,7 +564,7 @@ class SettingsFragment : Fragment() {
             setPadding(24.dp, 8.dp, 24.dp, 0)
             addView(TextView(requireContext()).apply {
                 setText(R.string.settings_routing_rule_hint)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
                 setPadding(0, 0, 0, 8.dp)
             })
             addView(actionButton)
@@ -749,7 +723,7 @@ class SettingsFragment : Fragment() {
                 Formatter.formatShortFileSize(requireContext(), selectedAsset.size),
                 if (selectedAsset == recommended) getString(R.string.settings_update_recommended_suffix) else "",
             )
-            setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
         }
         val buttonAssets = mutableMapOf<Int, GitHubRelease.ReleaseAsset>()
         val tabs = MaterialButtonToggleGroup(requireContext()).apply {
@@ -888,11 +862,11 @@ class SettingsFragment : Fragment() {
             addView(TextView(requireContext()).apply {
                 text = summary
                 setTextIsSelectable(true)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
             })
             addView(TextView(requireContext()).apply {
                 text = getString(R.string.settings_diagnostics_description)
-                setTextAppearance(R.style.TextAppearance_Olcrtc_Caption)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
                 setTextColor(
                     com.google.android.material.color.MaterialColors.getColor(
                         this,

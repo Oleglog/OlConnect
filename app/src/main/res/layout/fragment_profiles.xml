@@ -1,7 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Subscriptions, per client-profiles.html: one panel of saved sources, then the
-     single primary action with its hint. Rows are built in code (the source list
-     is dynamic), the panel keeps the ids the fragment already drives. -->
 <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -23,7 +20,77 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/navigation_profiles"
-            android:textAppearance="@style/TextAppearance.Olcrtc.TitleLarge" />
+            android:textAppearance="?attr/textAppearanceHeadlineSmall" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_1"
+            android:text="@string/profiles_intro"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_5"
+            app:cardBackgroundColor="?attr/colorSurfaceVariant"
+            app:cardCornerRadius="@dimen/corner_quiet"
+            app:cardElevation="0dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="@dimen/space_4">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/profiles_add_title"
+                        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_1"
+                        android:text="@string/profiles_add_summary"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/space_3"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/paste_subscription"
+                        style="@style/Widget.Material3.Button.IconButton.Outlined"
+                        android:layout_width="@dimen/icon_touch_target"
+                        android:layout_height="@dimen/icon_touch_target"
+                        android:contentDescription="@string/paste_clipboard_description"
+                        app:icon="@drawable/ic_paste_24" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/add_subscription"
+                        style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+                        android:layout_width="@dimen/icon_touch_target"
+                        android:layout_height="@dimen/icon_touch_target"
+                        android:layout_marginStart="@dimen/space_2"
+                        android:contentDescription="@string/subscription_add"
+                        app:icon="@drawable/ic_scan_qr_24" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <LinearLayout
             android:id="@+id/subscription_status_row"
@@ -36,11 +103,11 @@
 
             <com.google.android.material.progressindicator.CircularProgressIndicator
                 android:id="@+id/subscription_progress"
-                android:layout_width="18dp"
-                android:layout_height="18dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:indeterminate="true"
                 android:visibility="gone"
-                app:indicatorSize="18dp"
+                app:indicatorSize="20dp"
                 app:trackThickness="2dp" />
 
             <TextView
@@ -49,97 +116,43 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="@dimen/space_2"
                 android:layout_weight="1"
-                android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
+                android:textAppearance="?attr/textAppearanceBodySmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
-
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/tile_gap"
-            app:cardBackgroundColor="?attr/colorSurfaceContainer"
-            app:cardCornerRadius="@dimen/corner_card"
-            app:cardElevation="0dp"
-            app:strokeColor="?attr/colorOutlineVariant"
-            app:strokeWidth="@dimen/card_border">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="@dimen/tile_padding">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/profiles_saved_title"
-                    android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
-                    android:textColor="?attr/colorOnSurfaceVariant" />
-
-                <com.google.android.material.card.MaterialCardView
-                    android:id="@+id/empty"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_2"
-                    app:cardBackgroundColor="@android:color/transparent"
-                    app:cardCornerRadius="@dimen/corner_button"
-                    app:cardElevation="0dp"
-                    app:strokeColor="?attr/colorOutlineVariant"
-                    app:strokeWidth="@dimen/card_border">
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center"
-                        android:padding="@dimen/space_5"
-                        android:text="@string/subscriptions_placeholder"
-                        android:textAppearance="@style/TextAppearance.Olcrtc.Caption"
-                        android:textColor="?attr/colorOnSurfaceVariant" />
-                </com.google.android.material.card.MaterialCardView>
-
-                <LinearLayout
-                    android:id="@+id/profile_list"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_1"
-                    android:orientation="vertical" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/add_subscription"
-            android:layout_width="match_parent"
-            android:layout_height="@dimen/button_primary_height"
-            android:layout_marginTop="@dimen/tile_gap"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:text="@string/add_connection"
-            android:textAppearance="@style/TextAppearance.Olcrtc.LabelStrong"
-            app:cornerRadius="@dimen/corner_button"
-            app:icon="@drawable/ic_add_24"
-            app:iconGravity="textStart" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/paste_subscription"
-            style="?attr/materialButtonOutlinedStyle"
-            android:layout_width="match_parent"
-            android:layout_height="@dimen/button_secondary_height"
-            android:layout_marginTop="@dimen/space_2"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:text="@string/paste_clipboard"
-            android:textAppearance="@style/TextAppearance.Olcrtc.LabelStrong"
-            app:cornerRadius="@dimen/corner_button"
-            app:icon="@drawable/ic_paste_24"
-            app:iconGravity="textStart" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_2"
-            android:gravity="center"
-            android:text="@string/profiles_add_hint"
-            android:textAppearance="@style/TextAppearance.Olcrtc.Service"
-            android:textColor="?attr/colorOnSurfaceVariant" />
+            android:layout_marginTop="@dimen/space_5"
+            android:text="@string/profiles_saved_title"
+            android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/empty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_3"
+            app:cardBackgroundColor="?attr/colorSurface"
+            app:cardCornerRadius="@dimen/corner_quiet"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutline"
+            app:strokeWidth="1dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:padding="@dimen/space_6"
+                android:text="@string/subscriptions_placeholder"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:textColor="?attr/colorOnSurfaceVariant" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <LinearLayout
+            android:id="@+id/profile_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_3"
+            android:orientation="vertical" />
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

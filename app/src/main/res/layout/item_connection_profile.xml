@@ -1,99 +1,90 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A profile row, not a card: name, carrier, latency, actions. The active row is
-     marked by a 2 px rule and a word, never by a fill (design-system §11). -->
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:layout_marginBottom="@dimen/space_2"
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
-    android:minHeight="56dp"
-    app:cardBackgroundColor="@android:color/transparent"
-    app:cardCornerRadius="0dp"
+    android:minHeight="84dp"
+    app:cardBackgroundColor="?attr/colorSurfaceContainer"
+    app:cardCornerRadius="@dimen/corner_card"
     app:cardElevation="0dp"
-    app:strokeWidth="0dp">
+    app:strokeColor="?attr/colorOutline"
+    app:strokeWidth="@dimen/card_border">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <View
-            android:id="@+id/profile_rule"
-            android:layout_width="@dimen/state_rule_width"
-            android:layout_height="match_parent"
-            android:background="?attr/colorPrimary"
-            android:importantForAccessibility="no"
-            android:visibility="invisible" />
+        android:gravity="center_vertical"
+        android:minHeight="84dp"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/space_4"
+        android:paddingTop="@dimen/space_2"
+        android:paddingEnd="@dimen/space_2"
+        android:paddingBottom="@dimen/space_2">
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:gravity="center_vertical"
-            android:minHeight="56dp"
-            android:orientation="horizontal"
-            android:paddingStart="@dimen/space_3"
-            android:paddingTop="@dimen/space_2"
-            android:paddingEnd="@dimen/space_1"
-            android:paddingBottom="@dimen/space_2">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/profile_name"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:textAppearance="@style/TextAppearance.Olcrtc.TitleMedium" />
-
-                <TextView
-                    android:id="@+id/profile_detail"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
-                    android:textColor="?attr/colorOnSurfaceVariant" />
-            </LinearLayout>
+            android:orientation="vertical">
 
             <TextView
-                android:id="@+id/profile_latency"
-                android:layout_width="wrap_content"
+                android:id="@+id/profile_name"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/space_3"
-                android:gravity="end"
-                android:minWidth="48dp"
-                android:textAppearance="@style/TextAppearance.Olcrtc.NumSmall"
-                android:textStyle="bold"
-                android:visibility="gone" />
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="?attr/textAppearanceTitleMedium" />
 
-            <com.google.android.material.progressindicator.CircularProgressIndicator
-                android:id="@+id/profile_progress"
-                android:layout_width="18dp"
-                android:layout_height="18dp"
-                android:layout_marginStart="@dimen/space_3"
-                android:contentDescription="@string/profile_latency_checking"
-                android:indeterminate="true"
-                android:visibility="gone"
-                app:indicatorSize="18dp"
-                app:trackThickness="2dp" />
-
-            <androidx.appcompat.widget.AppCompatImageButton
-                android:id="@+id/profile_actions"
-                android:layout_width="@dimen/icon_touch_target"
-                android:layout_height="@dimen/icon_touch_target"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:padding="@dimen/space_3"
-                android:src="@drawable/ic_more_vert_20"
-                app:tint="?attr/colorOnSurfaceVariant" />
+            <TextView
+                android:id="@+id/profile_detail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:textColor="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
+
+        <TextView
+            android:id="@+id/profile_latency"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_3"
+            android:background="@drawable/bg_latency_badge"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:minWidth="52dp"
+            android:paddingStart="8dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="4dp"
+            android:textAppearance="?attr/textAppearanceLabelMedium"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <com.google.android.material.progressindicator.CircularProgressIndicator
+            android:id="@+id/profile_progress"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_marginStart="@dimen/space_3"
+            android:contentDescription="@string/profile_latency_checking"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:indicatorSize="18dp"
+            app:trackThickness="2dp" />
+
+        <androidx.appcompat.widget.AppCompatImageButton
+            android:id="@+id/profile_actions"
+            android:layout_width="@dimen/icon_touch_target"
+            android:layout_height="@dimen/icon_touch_target"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:padding="13dp"
+            android:src="@drawable/ic_more_vert_20"
+            app:tint="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- The status rule: a 2 px bar beside the state word. The base colour is a
-     theme token; the state tints it at runtime (bg_state_rule + backgroundTint). -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android">
-    <solid android:color="?attr/colorOutline" />
-    <corners android:radius="1dp" />
-</shape>

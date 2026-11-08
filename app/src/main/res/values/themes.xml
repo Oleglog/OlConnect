@@ -1,52 +1,28 @@
 <resources>
-    <!-- olcRTC "Рейка" theme. Roles point at the design tokens in colors.xml;
-         the overlay styles keep their names because the appearance settings are
-         a user feature (Bronze/Black/Mono palettes and the five accents). -->
     <style name="Theme.OlcrtcClient" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="colorPrimary">@color/olcrtc_accent</item>
-        <item name="colorOnPrimary">@color/olcrtc_accent_ink</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="colorPrimary">@color/olcrtc_primary</item>
+        <item name="colorOnPrimary">@color/olcrtc_on_primary</item>
         <item name="colorPrimaryContainer">@color/olcrtc_primary_container</item>
         <item name="colorOnPrimaryContainer">@color/olcrtc_on_primary_container</item>
         <item name="colorSecondary">@color/olcrtc_secondary</item>
         <item name="colorOnSecondary">@color/olcrtc_on_secondary</item>
-        <item name="colorSecondaryContainer">@color/olcrtc_surface_hover</item>
-        <item name="colorOnSecondaryContainer">@color/olcrtc_ink</item>
-        <item name="colorTertiary">@color/olcrtc_ink_muted</item>
-        <item name="colorOnTertiary">@color/olcrtc_surface_container</item>
-        <item name="colorSurface">@color/olcrtc_bg</item>
-        <item name="colorOnSurface">@color/olcrtc_ink</item>
+        <item name="colorSurface">@color/olcrtc_surface</item>
         <item name="colorSurfaceContainer">@color/olcrtc_surface_container</item>
         <item name="colorSurfaceContainerHigh">@color/olcrtc_surface_container_high</item>
-        <item name="colorSurfaceContainerHighest">@color/olcrtc_surface_container_high</item>
-        <item name="colorSurfaceContainerLow">@color/olcrtc_surface_raised</item>
+        <item name="colorOnSurface">@color/olcrtc_on_surface</item>
         <item name="colorSurfaceVariant">@color/olcrtc_surface_variant</item>
-        <item name="colorOnSurfaceVariant">@color/olcrtc_ink_muted</item>
-        <item name="colorOutline">@color/olcrtc_line_strong</item>
-        <item name="colorOutlineVariant">@color/olcrtc_line</item>
+        <item name="colorOnSurfaceVariant">@color/olcrtc_on_surface_variant</item>
+        <item name="colorOutline">@color/olcrtc_outline</item>
         <item name="colorError">@color/olcrtc_error</item>
         <item name="colorOnError">@color/olcrtc_on_error</item>
-        <item name="colorErrorContainer">@color/state_down_ink</item>
-        <item name="colorOnErrorContainer">@color/state_down</item>
-        <item name="android:colorBackground">@color/olcrtc_bg</item>
-        <item name="android:navigationBarColor">@color/olcrtc_bg</item>
-        <item name="android:statusBarColor">@color/olcrtc_bg</item>
+        <item name="android:colorBackground">@color/olcrtc_surface</item>
+        <item name="android:navigationBarColor">@color/olcrtc_surface</item>
         <item name="android:windowActionModeOverlay">true</item>
-
-        <!-- Type scale: one family for text, mono only for numbers. -->
-        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.Olcrtc.Screen</item>
+        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.Olcrtc.Headline</item>
         <item name="textAppearanceTitleLarge">@style/TextAppearance.Olcrtc.TitleLarge</item>
         <item name="textAppearanceTitleMedium">@style/TextAppearance.Olcrtc.TitleMedium</item>
         <item name="textAppearanceTitleSmall">@style/TextAppearance.Olcrtc.TitleSmall</item>
-        <item name="textAppearanceBodyLarge">@style/TextAppearance.Olcrtc.Body</item>
-        <item name="textAppearanceBodyMedium">@style/TextAppearance.Olcrtc.Body</item>
-        <item name="textAppearanceBodySmall">@style/TextAppearance.Olcrtc.Caption</item>
-        <item name="textAppearanceLabelLarge">@style/TextAppearance.Olcrtc.LabelStrong</item>
-        <item name="textAppearanceLabelMedium">@style/TextAppearance.Olcrtc.Label</item>
-        <item name="textAppearanceLabelSmall">@style/TextAppearance.Olcrtc.Service</item>
-
-        <!-- Shapes: 4 px controls, 8 px panels, 12 px overlays. -->
-        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.OlcrtcClient.SmallComponent</item>
         <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.OlcrtcClient.MediumComponent</item>
         <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.OlcrtcClient.LargeComponent</item>
     </style>
@@ -68,7 +44,6 @@
         <item name="android:windowNoTitle">true</item>
     </style>
 
-    <!-- Palette overlay: Bronze. Same ladder as the base theme, warm tint. -->
     <style name="ThemeOverlay.OlcrtcClient.Bronze" parent="">
         <item name="colorPrimary">@color/olcrtc_bronze_primary</item>
         <item name="colorOnPrimary">@color/olcrtc_bronze_on_primary</item>
@@ -79,18 +54,14 @@
         <item name="colorSurface">@color/olcrtc_bronze_surface</item>
         <item name="colorSurfaceContainer">@color/olcrtc_bronze_surface_container</item>
         <item name="colorSurfaceContainerHigh">@color/olcrtc_bronze_surface_container_high</item>
-        <item name="colorSurfaceContainerHighest">@color/olcrtc_bronze_surface_container_high</item>
         <item name="colorOnSurface">@color/olcrtc_bronze_on_surface</item>
         <item name="colorSurfaceVariant">@color/olcrtc_bronze_surface_variant</item>
         <item name="colorOnSurfaceVariant">@color/olcrtc_bronze_on_surface_variant</item>
         <item name="colorOutline">@color/olcrtc_bronze_outline</item>
-        <item name="colorOutlineVariant">@color/olcrtc_bronze_surface_variant</item>
         <item name="android:colorBackground">@color/olcrtc_bronze_surface</item>
         <item name="android:navigationBarColor">@color/olcrtc_bronze_surface</item>
-        <item name="android:statusBarColor">@color/olcrtc_bronze_surface</item>
     </style>
 
-    <!-- Palette overlay: Black. Dark-only palette, so one set of values serves both. -->
     <style name="ThemeOverlay.OlcrtcClient.Black.Base" parent="">
         <item name="colorPrimary">@color/olcrtc_black_primary</item>
         <item name="colorOnPrimary">@color/olcrtc_black_on_primary</item>
@@ -101,12 +72,10 @@
         <item name="colorSurface">@color/olcrtc_black_surface</item>
         <item name="colorSurfaceContainer">@color/olcrtc_black_surface_container</item>
         <item name="colorSurfaceContainerHigh">@color/olcrtc_black_surface_container_high</item>
-        <item name="colorSurfaceContainerHighest">@color/olcrtc_black_surface_container_high</item>
         <item name="colorOnSurface">@color/olcrtc_black_on_surface</item>
         <item name="colorSurfaceVariant">@color/olcrtc_black_surface_variant</item>
         <item name="colorOnSurfaceVariant">@color/olcrtc_black_on_surface_variant</item>
         <item name="colorOutline">@color/olcrtc_black_outline</item>
-        <item name="colorOutlineVariant">@color/olcrtc_black_surface_variant</item>
         <item name="android:colorBackground">@color/olcrtc_black_surface</item>
         <item name="android:statusBarColor">@color/olcrtc_black_surface</item>
         <item name="android:navigationBarColor">@color/olcrtc_black_surface</item>
@@ -116,7 +85,6 @@
     <style name="ThemeOverlay.OlcrtcClient.Black" parent="ThemeOverlay.OlcrtcClient.Black.Base">
     </style>
 
-    <!-- Palette overlay: Mono. Monochrome ladder, accent stays the ink colour. -->
     <style name="ThemeOverlay.OlcrtcClient.Mono" parent="">
         <item name="colorPrimary">@color/olcrtc_mono_primary</item>
         <item name="colorOnPrimary">@color/olcrtc_mono_on_primary</item>
@@ -127,18 +95,14 @@
         <item name="colorSurface">@color/olcrtc_mono_surface</item>
         <item name="colorSurfaceContainer">@color/olcrtc_mono_surface_container</item>
         <item name="colorSurfaceContainerHigh">@color/olcrtc_mono_surface_container_high</item>
-        <item name="colorSurfaceContainerHighest">@color/olcrtc_mono_surface_container_high</item>
         <item name="colorOnSurface">@color/olcrtc_mono_on_surface</item>
         <item name="colorSurfaceVariant">@color/olcrtc_mono_surface_variant</item>
         <item name="colorOnSurfaceVariant">@color/olcrtc_mono_on_surface_variant</item>
         <item name="colorOutline">@color/olcrtc_mono_outline</item>
-        <item name="colorOutlineVariant">@color/olcrtc_mono_surface_variant</item>
         <item name="android:colorBackground">@color/olcrtc_mono_surface</item>
         <item name="android:navigationBarColor">@color/olcrtc_mono_surface</item>
-        <item name="android:statusBarColor">@color/olcrtc_mono_surface</item>
     </style>
 
-    <!-- Accent overlays: one hue shift, everything else keeps the palette. -->
     <style name="ThemeOverlay.OlcrtcClient.Accent.Teal" parent="">
         <item name="colorPrimary">@color/appearance_accent_teal</item>
         <item name="colorOnPrimary">@color/appearance_accent_teal_on</item>
@@ -184,136 +148,8 @@
         <item name="colorOnSecondary">@color/appearance_accent_amber_on</item>
     </style>
 
-    <!-- Shapes: 4 px controls, 8 px panels, 12 px overlays. -->
-    <style name="ShapeAppearance.OlcrtcClient.SmallComponent" parent="ShapeAppearance.Material3.SmallComponent">
-        <item name="cornerSize">4dp</item>
-    </style>
-
     <style name="ShapeAppearance.OlcrtcClient.MediumComponent" parent="ShapeAppearance.Material3.MediumComponent">
         <item name="cornerSize">8dp</item>
-    </style>
-
-    <style name="ShapeAppearance.OlcrtcClient.LargeComponent" parent="ShapeAppearance.Material3.LargeComponent">
-        <item name="cornerSize">12dp</item>
-    </style>
-
-    <!-- Type scale: Screen 26/700, Title 20/700, Panel 14/700, Body 14/400,
-         Caption 12/400, Service 11/500, numbers in mono with tabular figures.
-         Manrope ships as one variable file: the weight axis is addressed with
-         textFontWeight (API 28+); on 26-27 the base weight shows, which is the
-         agreed trade-off. JetBrains Mono is used for numbers only. -->
-    <style name="TextAppearance.Olcrtc.Screen" parent="TextAppearance.Material3.HeadlineSmall">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">700</item>
-        <item name="android:textSize">26sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">-0.01</item>
-        <item name="android:lineSpacingMultiplier">1.15</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">700</item>
-        <item name="android:textSize">20sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">-0.01</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.TitleMedium" parent="TextAppearance.Material3.TitleMedium">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">700</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">0</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.TitleSmall" parent="TextAppearance.Material3.TitleSmall">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">700</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">0</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.Body" parent="TextAppearance.Material3.BodyMedium">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">400</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">normal</item>
-        <item name="android:lineSpacingMultiplier">1.5</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.Caption" parent="TextAppearance.Material3.BodySmall">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">400</item>
-        <item name="android:textSize">12sp</item>
-        <item name="android:textStyle">normal</item>
-        <item name="android:lineSpacingMultiplier">1.4</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.LabelStrong" parent="TextAppearance.Material3.LabelLarge">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">700</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:textStyle">bold</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.Label" parent="TextAppearance.Material3.LabelMedium">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">500</item>
-        <item name="android:textSize">12sp</item>
-        <item name="android:textStyle">normal</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.Service" parent="TextAppearance.Material3.LabelSmall">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">500</item>
-        <item name="android:textSize">11sp</item>
-        <item name="android:textStyle">normal</item>
-    </style>
-
-    <!-- Numbers: mono with tabular figures, so columns do not jump. -->
-    <style name="TextAppearance.Olcrtc.Num" parent="TextAppearance.Material3.LabelLarge">
-        <item name="android:fontFamily">@font/jetbrains_mono_medium</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:textStyle">normal</item>
-        <item name="android:fontFeatureSettings">tnum</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.NumBig" parent="TextAppearance.Material3.HeadlineMedium">
-        <item name="android:fontFamily">@font/jetbrains_mono_bold</item>
-        <item name="android:textSize">26sp</item>
-        <item name="android:textStyle">normal</item>
-        <item name="android:letterSpacing">-0.02</item>
-        <item name="android:fontFeatureSettings">tnum</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.NumSmall" parent="TextAppearance.Material3.LabelMedium">
-        <item name="android:fontFamily">@font/jetbrains_mono_regular</item>
-        <item name="android:textSize">12sp</item>
-        <item name="android:textStyle">normal</item>
-        <item name="android:fontFeatureSettings">tnum</item>
-    </style>
-
-    <!-- The wordmark: identity only, the accent marks the product name. -->
-    <style name="TextAppearance.Olcrtc.Wordmark" parent="TextAppearance.Material3.HeadlineSmall">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">700</item>
-        <item name="android:textSize">20sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">-0.01</item>
-    </style>
-
-    <style name="TextAppearance.Olcrtc.Headline" parent="TextAppearance.Olcrtc.Screen" />
-
-    <style name="TextAppearance.Olcrtc.Data" parent="TextAppearance.Olcrtc.NumSmall" />
-
-    <!-- The status vocabulary: a word with a 2 px rule, never a bare dot. -->
-    <style name="TextAppearance.Olcrtc.State" parent="TextAppearance.Olcrtc.TitleMedium">
-        <item name="android:fontFamily">@font/manrope_variable</item>
-        <item name="android:textFontWeight">700</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
     </style>
 
     <style name="Widget.OlcrtcClient.SettingsRow" parent="">
@@ -321,20 +157,21 @@
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
         <item name="android:gravity">center_vertical</item>
-        <item name="android:minHeight">@dimen/row_height</item>
+        <item name="android:minHeight">76dp</item>
         <item name="android:orientation">horizontal</item>
-        <item name="android:paddingStart">@dimen/space_4</item>
-        <item name="android:paddingTop">@dimen/space_2</item>
-        <item name="android:paddingEnd">@dimen/space_2</item>
-        <item name="android:paddingBottom">@dimen/space_2</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:paddingBottom">10dp</item>
     </style>
 
     <style name="Widget.OlcrtcClient.SettingsDivider" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">1dp</item>
-        <item name="android:layout_marginStart">@dimen/space_4</item>
-        <item name="android:layout_marginEnd">@dimen/space_4</item>
-        <item name="android:background">?attr/colorOutlineVariant</item>
+        <item name="android:layout_marginStart">16dp</item>
+        <item name="android:layout_marginEnd">16dp</item>
+        <item name="android:alpha">0.25</item>
+        <item name="android:background">?attr/colorOutline</item>
     </style>
 
     <style name="Widget.OlcrtcClient.BottomNavigation.Item" parent="">
@@ -347,8 +184,8 @@
         <item name="android:foreground">?attr/selectableItemBackgroundBorderless</item>
         <item name="android:gravity">center</item>
         <item name="android:orientation">vertical</item>
-        <item name="android:paddingTop">@dimen/space_1</item>
-        <item name="android:paddingBottom">@dimen/space_2</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
     </style>
 
     <style name="Widget.OlcrtcClient.BottomNavigation.Indicator" parent="">
@@ -370,14 +207,54 @@
     <style name="Widget.OlcrtcClient.BottomNavigation.Label" parent="TextAppearance.Material3.LabelMedium">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">2dp</item>
+        <item name="android:layout_marginTop">3dp</item>
         <item name="android:duplicateParentState">true</item>
-        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:gravity">center</item>
         <item name="android:importantForAccessibility">no</item>
         <item name="android:includeFontPadding">false</item>
         <item name="android:maxLines">1</item>
         <item name="android:textColor">@color/main_navigation_item</item>
         <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="ShapeAppearance.OlcrtcClient.LargeComponent" parent="ShapeAppearance.Material3.LargeComponent">
+        <item name="cornerSize">8dp</item>
+    </style>
+
+    <style name="TextAppearance.Olcrtc.Wordmark" parent="TextAppearance.Material3.HeadlineMedium">
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textSize">28sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.04</item>
+    </style>
+
+    <style name="TextAppearance.Olcrtc.Headline" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.02</item>
+    </style>
+
+    <style name="TextAppearance.Olcrtc.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.015</item>
+    </style>
+
+    <style name="TextAppearance.Olcrtc.TitleMedium" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.01</item>
+    </style>
+
+    <style name="TextAppearance.Olcrtc.TitleSmall" parent="TextAppearance.Material3.TitleSmall">
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="TextAppearance.Olcrtc.Data" parent="TextAppearance.Material3.LabelLarge">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
     </style>
 </resources>

@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.addCallback
 import android.view.HapticFeedbackConstants
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,7 +43,6 @@ import io.github.oleglog.olcrtc.client.settings.SettingsFragment
 import io.github.oleglog.olcrtc.client.statistics.StatisticsFragment
 import io.github.oleglog.olcrtc.client.subscription.SubscriptionRefresher
 import io.github.oleglog.olcrtc.client.ui.AppearanceTheme
-import io.github.oleglog.olcrtc.client.ui.showMessage
 import io.github.oleglog.olcrtc.client.updater.ApkUpdateInstaller
 import io.github.oleglog.olcrtc.client.updater.GitHubRelease
 import io.github.oleglog.olcrtc.client.updater.GitHubUpdateClient
@@ -136,7 +136,7 @@ class MainActivity : AppCompatActivity() {
             installUpdate(pending.release, pending.asset)
         } else {
             pendingInstall = null
-            showMessage(getString(R.string.settings_update_install_permission), long = true)
+            Toast.makeText(this, R.string.settings_update_install_permission, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -321,7 +321,7 @@ class MainActivity : AppCompatActivity() {
     internal fun openBatteryOptimizationSettings() {
         val powerManager = getSystemService(PowerManager::class.java)
         if (powerManager.isIgnoringBatteryOptimizations(packageName)) {
-            showMessage(getString(R.string.battery_optimization_already_disabled), long = true)
+            Toast.makeText(this, R.string.battery_optimization_already_disabled, Toast.LENGTH_LONG).show()
             return
         }
         val packageUri = Uri.parse("package:$packageName")
@@ -330,7 +330,7 @@ class MainActivity : AppCompatActivity() {
         }.recoverCatching {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri))
         }.onFailure {
-            showMessage(getString(R.string.settings_system_screen_unavailable), long = true)
+            Toast.makeText(this, R.string.settings_system_screen_unavailable, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -422,7 +422,7 @@ class MainActivity : AppCompatActivity() {
 
     internal fun installUpdate(release: GitHubRelease, asset: GitHubRelease.ReleaseAsset) {
         if (updateInstallInProgress) {
-            showMessage(getString(R.string.settings_update_downloading))
+            Toast.makeText(this, R.string.settings_update_downloading, Toast.LENGTH_SHORT).show()
             return
         }
         val socksPort = runCatching { vpn?.activeSocksPort }.getOrNull() ?: 0
@@ -435,7 +435,7 @@ class MainActivity : AppCompatActivity() {
         val installer = ApkUpdateInstaller(applicationContext, proxy = proxy)
         if (updateInstallAction(installer.canRequestPackageInstalls()) == UpdateInstallAction.REQUEST_PERMISSION) {
             pendingInstall = PendingInstall(release, asset)
-            showMessage(getString(R.string.settings_update_install_permission), long = true)
+            Toast.makeText(this, R.string.settings_update_install_permission, Toast.LENGTH_LONG).show()
             runCatching {
                 installPermission.launch(
                     Intent(
@@ -459,7 +459,7 @@ class MainActivity : AppCompatActivity() {
         }
         val progressText = android.widget.TextView(this).apply {
             setText(R.string.settings_update_downloading)
-            setTextAppearance(R.style.TextAppearance_Olcrtc_Body)
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
         }
         val progressContent = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
@@ -517,7 +517,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showUpdateFailure(error: Throwable) {
         val message = error.message ?: getString(R.string.settings_update_install_failed)
-        showMessage(message, long = true)
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.settings_check_update)
@@ -601,15 +601,15 @@ class MainActivity : AppCompatActivity() {
         val scheme = intent.data?.scheme?.lowercase()
         val subscriptionLink = runCatching { SubscriptionDeepLinkParser.parseOrNull(raw) }
         if (subscriptionLink.isFailure) {
-            showMessage(getString(R.string.invalid_subscription_link), long = true)
+            Toast.makeText(this, R.string.invalid_subscription_link, Toast.LENGTH_LONG).show()
             return
         }
         when {
-            raw.length > MAX_EXTERNAL_IMPORT_CHARS -> showMessage(getString(R.string.external_import_too_large), long = true)
+            raw.length > MAX_EXTERNAL_IMPORT_CHARS -> Toast.makeText(this, R.string.external_import_too_large, Toast.LENGTH_LONG).show()
             subscriptionLink.getOrNull() != null -> {
                 routeExternalImport(raw, R.id.profilesFragment)
             }
-            scheme !in EXTERNAL_PROFILE_SCHEMES -> showMessage(getString(R.string.invalid_profile), long = true)
+            scheme !in EXTERNAL_PROFILE_SCHEMES -> Toast.makeText(this, R.string.invalid_profile, Toast.LENGTH_LONG).show()
             else -> {
                 routeExternalImport(raw, R.id.connectionFragment)
             }
