@@ -261,6 +261,7 @@ func newRecvWS(limit int) *cupsWS {
 	cfg := DefaultCupsonlineConfig()
 	cfg.MaxMessageData = limit
 	w := &cupsWS{config: cfg, stats: &channelStats{}}
+	w.authPtr.Store(&cupsAuth{userUUID: "self", roomUUID: "room"})
 	return w
 }
 

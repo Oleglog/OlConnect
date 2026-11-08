@@ -1158,30 +1158,38 @@ func (w *cupsWS) frameChunks(batch [][]byte) []cupsChunk {
 	limit := max(w.config.MaxMessageData, 2)
 	var chunks []cupsChunk
 	var cur []byte
-	cont := false // the message being built starts inside a packet
+	// nextCont says the message being built starts inside a packet.
+	nextCont := false
 	emit := func() {
 		if len(cur) == 0 {
 			return
 		}
-		chunks = append(chunks, cupsChunk{data: cur, cont: cont})
-		cur, cont = nil, false
+		chunks = append(chunks, cupsChunk{data: cur, cont: nextCont})
+		cur, nextCont = nil, false
 	}
 	for _, pkt := range batch {
 		var hdr [2]byte
 		binary.BigEndian.PutUint16(hdr[:], uint16(len(pkt)))
-		body := make([]byte, 0, 2+len(pkt))
-		body = append(body, hdr[:]...)
-		body = append(body, pkt...)
-		for len(body) > 0 {
-			take := min(limit-len(cur), len(body))
-			cur = append(cur, body[:take]...)
-			body = body[take:]
-			if len(body) > 0 {
-				// What is left of this packet opens the next message, so that
-				// message starts inside a packet.
-				emit()
-				cont = true
-			}
+		if len(cur)+2+len(pkt) <= limit {
+			cur = append(cur, hdr[:]...)
+			cur = append(cur, pkt...)
+			continue
+		}
+		// This packet crosses a message boundary.
+		rest := pkt
+		if limit-len(cur) < 2 {
+			emit() // no room for the length prefix: it opens the next message
+		}
+		cur = append(cur, hdr[:]...)
+		n := min(limit-len(cur), len(rest))
+		cur = append(cur, rest[:n]...)
+		rest = rest[n:]
+		for len(rest) > 0 {
+			emit()
+			nextCont = true // the rest of this packet opens the next message
+			n = min(limit, len(rest))
+			cur = append(cur, rest[:n]...)
+			rest = rest[n:]
 		}
 	}
 	emit()
@@ -1441,7 +1449,7 @@ func (w *cupsWS) handleReply(raw []byte) {
 		return
 	}
 	sender, _ := payload["user_uuid"].(string)
-	if sender == w.auth().userUUID {
+	if a := w.auth(); a != nil && sender == a.userUUID {
 		return
 	}
 	cursors, _ := payload["cursors"].([]interface{})
