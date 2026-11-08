@@ -1,22 +1,43 @@
 <resources>
+    <!-- Spacing: a 4 px step; allowed values are 4, 8, 12, 16, 24, 32, 48.
+         Client column: 16 px fields, 12 px between tiles (design-system §4). -->
     <dimen name="space_1">4dp</dimen>
     <dimen name="space_2">8dp</dimen>
     <dimen name="space_3">12dp</dimen>
     <dimen name="space_4">16dp</dimen>
-    <dimen name="space_5">20dp</dimen>
-    <dimen name="space_6">24dp</dimen>
-    <dimen name="page_padding">20dp</dimen>
-    <dimen name="corner_card">20dp</dimen>
-    <dimen name="corner_button">8dp</dimen>
-    <dimen name="corner_sheet">16dp</dimen>
-    <dimen name="corner_quiet">20dp</dimen>
-    <dimen name="button_primary_height">56dp</dimen>
-    <dimen name="button_secondary_height">56dp</dimen>
-    <dimen name="icon_touch_target">48dp</dimen>
-    <dimen name="icon_action_size">22dp</dimen>
-    <dimen name="icon_navigation_size">24dp</dimen>
+    <dimen name="space_5">24dp</dimen>
+    <dimen name="space_6">32dp</dimen>
+    <dimen name="space_7">48dp</dimen>
+    <dimen name="page_padding">16dp</dimen>
+    <dimen name="tile_padding">12dp</dimen>
+    <dimen name="tile_gap">12dp</dimen>
+    <dimen name="row_height">48dp</dimen>
+
+    <!-- Radii: 4 px fields, chips, buttons; 8 px panels and tiles; 12 px modals. -->
+    <dimen name="corner_button">4dp</dimen>
+    <dimen name="corner_card">8dp</dimen>
+    <dimen name="corner_sheet">12dp</dimen>
+    <dimen name="corner_quiet">8dp</dimen>
     <dimen name="card_border">1dp</dimen>
     <dimen name="card_border_active">2dp</dimen>
-    <dimen name="card_elevation_connected">2dp</dimen>
-    <dimen name="card_elevation_selected">1dp</dimen>
+    <dimen name="card_elevation_connected">0dp</dimen>
+    <dimen name="card_elevation_selected">0dp</dimen>
+
+    <!-- Client action button: 44 px per the mockup; secondary rows match it. -->
+    <dimen name="button_primary_height">44dp</dimen>
+    <dimen name="button_secondary_height">44dp</dimen>
+    <dimen name="icon_touch_target">44dp</dimen>
+    <dimen name="icon_action_size">18dp</dimen>
+    <dimen name="icon_navigation_size">18dp</dimen>
+    <dimen name="chip_height">22dp</dimen>
+
+    <!-- The rail: one hour as 60 ticks. -->
+    <dimen name="rail_height">14dp</dimen>
+    <dimen name="rail_height_row">10dp</dimen>
+    <dimen name="rail_tick_width">3dp</dimen>
+    <dimen name="rail_tick_gap">2dp</dimen>
+
+    <!-- The status rule that replaces a coloured dot. -->
+    <dimen name="state_rule_width">2dp</dimen>
+    <dimen name="state_rule_height">12dp</dimen>
 </resources>
