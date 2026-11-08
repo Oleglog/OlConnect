@@ -20,14 +20,15 @@ func TestWritePacerCutsOnRefusalAndGrows(t *testing.T) {
 	w.ratePub.Store(math.Float64bits(cfg.RateStart))
 
 	w.stats.writeRefused.Add(1) // the relay answered 429
+	start := time.Now()
 	if err := w.pace(0); err != nil {
 		t.Fatal(err)
 	}
+	if waited := time.Since(start); waited < 15*time.Millisecond {
+		t.Fatalf("a 429 did not hold writes: pace returned after %v, want the 20 ms hold", waited)
+	}
 	if w.rate != 20 {
 		t.Fatalf("rate after 429 = %v, want half of 40", w.rate)
-	}
-	if !time.Now().Before(w.rateHold) {
-		t.Fatal("a 429 did not hold writes")
 	}
 
 	w.rateAt = time.Now().Add(-2 * time.Second) // a clean second has passed
