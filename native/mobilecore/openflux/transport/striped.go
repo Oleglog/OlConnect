@@ -669,11 +669,12 @@ func (s *StripedTransport) silenceLoop() {
 	defer t.Stop()
 	var lastAck, lastDel uint64
 	var aliveAt time.Time
+	var now time.Time
 	for {
 		select {
 		case <-s.done:
 			return
-		case now := <-t.C:
+		case now = <-t.C:
 		}
 		acks := s.ackRecv.Load()
 		del, _, _, _, _ := s.ro.snapshot()
