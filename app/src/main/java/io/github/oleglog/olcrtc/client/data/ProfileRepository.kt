@@ -853,13 +853,19 @@ internal class ProfileRepository(
         transport = transport.value,
         dnsServer = dnsServer.orEmpty(),
         cookies = cookies?.let(secrets::encrypt) ?: byteArrayOf(),
+        encryptionKey = encryptionKey?.takeIf(String::isNotBlank)?.let(secrets::encrypt),
+        codec = codec.value,
     )
 
     private fun OpenFluxProfileEntity.toProfile() = io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile(
         name = name,
         documentUrl = secrets.decrypt(documentUrl),
         transport = io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Transport.parse(transport),
+        codec = codec?.takeIf(String::isNotBlank)
+            ?.let(io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec::parse)
+            ?: io.github.oleglog.olcrtc.client.profile.openflux.OpenFluxProfile.Codec.BATCHED,
         dnsServer = dnsServer.takeIf(String::isNotBlank),
+        encryptionKey = encryptionKey?.takeIf(ByteArray::isNotEmpty)?.let(secrets::decrypt)?.takeIf(String::isNotBlank),
         cookies = cookies.takeIf(ByteArray::isNotEmpty)?.let(secrets::decrypt)?.takeIf(String::isNotBlank),
     )
 

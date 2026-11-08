@@ -81,6 +81,7 @@ internal class OpenFluxSession(
         // over, how big it is and for which transport. Names only, no values.
         onLog(
             "cookies -> core: transport=${profile.transport.value} codec=${profile.codec.value} " +
+                "key=${if (profile.encryptionKey.isNullOrBlank()) "none" else "set"} " +
                 "chars=${cookies.length} lines=${cookies.split('\n').count(String::isNotBlank)} " +
                 describeCookieJar(cookies),
         )

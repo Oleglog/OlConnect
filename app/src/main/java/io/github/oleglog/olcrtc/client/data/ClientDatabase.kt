@@ -78,6 +78,13 @@ internal data class OpenFluxProfileEntity(
     val transport: String,
     val dnsServer: String,
     @ColumnInfo(defaultValue = "x''") val cookies: ByteArray = byteArrayOf(),
+    // Both columns are nullable and carry no default on purpose: Room validates
+    // a column default against the live table after a migration, so a default
+    // that the ALTER TABLE does not repeat crashes every existing install (see
+    // the compatibilityMode incident in v1.7.45). A nullable column needs no
+    // default in either place.
+    val encryptionKey: ByteArray? = null,
+    val codec: String? = null,
 )
 
 @Dao
@@ -617,7 +624,7 @@ internal class RoutingRuleRepository(
         AppRoutingEntryEntity::class,
         RoutingRuleEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 internal abstract class ClientDatabase : RoomDatabase() {
@@ -760,6 +767,19 @@ internal abstract class ClientDatabase : RoomDatabase() {
             }
         }
 
+        // v1.7.53: an imported openflux:// link carries the encryption key (k=)
+        // and the codec (c=), but the local table had nowhere to keep them, so
+        // insertLocal/update dropped both and the profile reloaded without the
+        // key. On Boards that is a dead tunnel: the board refuses frames whose
+        // payload is a visible IP packet (securityCode NETWORK_TRANSPORT), so
+        // the peer stayed silent while both ends reported "connected".
+        internal val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE `openflux_profiles` ADD COLUMN `encryptionKey` BLOB")
+                database.execSQL("ALTER TABLE `openflux_profiles` ADD COLUMN `codec` TEXT")
+            }
+        }
+
         fun open(context: Context): ClientDatabase = Room.databaseBuilder(
             context.applicationContext,
             ClientDatabase::class.java,
@@ -776,6 +796,7 @@ internal abstract class ClientDatabase : RoomDatabase() {
             MIGRATION_9_10,
             MIGRATION_10_11,
             MIGRATION_11_12,
+            MIGRATION_12_13,
         )
             .addCallback(localGroupCallback)
             .enableMultiInstanceInvalidation()

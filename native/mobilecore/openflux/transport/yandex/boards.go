@@ -131,6 +131,10 @@ type BoardsTransport struct {
 	// a shard host and the site host behave differently per deployment, and this
 	// keeps a reconnect on the endpoint that actually served us.
 	goodSocketURL atomic.Value
+
+	// warnNetworkTransport keeps the "the board refuses visible IP traffic"
+	// advice to one line: every refused write repeats the same ack.
+	warnNetworkTransport atomic.Bool
 }
 
 func NewBoardsTransport(rawURL string, config transport.TransportConfig) *BoardsTransport {
@@ -631,6 +635,26 @@ func mergeBoardState(dst, src map[string]string) {
 	}
 }
 
+// ackSecurityCode returns the securityCode of an event ack that carries an
+// error, or "" for a plain ack. The board answers e.g.
+// `433[{"error":{"code":200,"securityCode":"NETWORK_TRANSPORT"}}]`.
+func ackSecurityCode(raw []byte) string {
+	idx := bytes.IndexByte(raw, '[')
+	if idx < 0 {
+		return ""
+	}
+	var arr []struct {
+		Error *struct {
+			Code         int    `json:"code"`
+			SecurityCode string `json:"securityCode"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw[idx:], &arr); err != nil || len(arr) == 0 || arr[0].Error == nil {
+		return ""
+	}
+	return arr[0].Error.SecurityCode
+}
+
 func (t *BoardsTransport) connectAndServe(info boardsInfo) error {
 
 	header := http.Header{}
@@ -1008,10 +1032,19 @@ func (t *BoardsTransport) handleMessage(sess *boardsSession, raw []byte) {
 
 	if bytes.HasPrefix(raw, []byte("43")) {
 		t.handle431(sess, raw)
-		if bytes.Contains(raw, []byte(`"error"`)) {
+		if code := ackSecurityCode(raw); code != "" {
 			// Every event goes out with an ack id, so a refusal arrives here
 			// instead of the log; without this a rejected write is silent.
 			utils.Debugf("[BOARDS] event ack error: %s", shortStr(string(raw), 240))
+			if code == "NETWORK_TRANSPORT" && t.warnNetworkTransport.CompareAndSwap(false, true) {
+				// The board decodes the object value and refuses anything that
+				// carries visible IPv4/TCP traffic (measured 2026-11-08: a real
+				// SYN inside the batch is refused, the same frame with a
+				// zero-filled packet passes). Sealed frames look random, so this
+				// is what a peer without -encryption-key hits before anything
+				// reaches the other side.
+				utils.Infof("[BOARDS] the board refuses frames carrying visible IP traffic; both peers must run with the same -encryption-key")
+			}
 		}
 		return
 	}

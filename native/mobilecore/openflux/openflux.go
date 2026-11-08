@@ -206,6 +206,18 @@ func Start(documentURL string, transportType string) string {
 	} else if envKey := os.Getenv("OPENFLUX_KEY"); envKey != "" {
 		key = strings.TrimSpace(envKey)
 	}
+	if key == "" && (detected == "boards" || detected == "board") {
+		// The board decodes every object value and refuses one that carries a
+		// visible IP packet (securityCode NETWORK_TRANSPORT), so a keyless
+		// boards profile joins the board, shows up as a guest and carries
+		// nothing at all. Refuse it here instead of reporting a live tunnel.
+		const msg = "Доскам нужен ключ шифрования: импортируй профиль по ссылке openflux:// с параметром k="
+		appendLog("[ANDROID] " + msg)
+		client.mu.Lock()
+		client.running = false
+		client.mu.Unlock()
+		return msg
+	}
 	if key != "" {
 		appendLog("[ANDROID] Включение сквозного шифрования AES-256-GCM")
 		encTrans, err := transport.NewEncryptedTransport(innerTrans, key, encryptionContext(detected, documentURL), false)
@@ -217,11 +229,6 @@ func Start(documentURL string, transportType string) string {
 			return err.Error()
 		}
 		innerTrans = encTrans
-	} else if detected == "boards" || detected == "board" {
-		// The board drops frames whose payload is a real IP packet
-		// (securityCode NETWORK_TRANSPORT), so a keyless boards profile
-		// connects and then carries nothing.
-		appendLog("[ANDROID] Доски без ключа шифрования: доска отбросит трафик, нужен k= в ссылке профиля")
 	}
 
 	codecMu.Lock()
