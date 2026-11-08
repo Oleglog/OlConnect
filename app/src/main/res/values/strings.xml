@@ -401,6 +401,7 @@
     <string name="paste_clipboard_description">Paste a connection or subscription link</string>
     <string name="import_and_connect">Import and connect</string>
     <string name="paste_clipboard">Paste</string>
+    <string name="profiles_add_hint">QR code or a link from the clipboard</string>
     <string name="scan_qr">Scan QR</string>
     <string name="qr_scanner_hint">Place the QR code inside the frame</string>
     <string name="stop_scan">Stop scan</string>

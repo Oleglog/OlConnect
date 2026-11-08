@@ -397,6 +397,7 @@
     <string name="paste_clipboard_description">Вставить ссылку подключения или подписки</string>
     <string name="import_and_connect">Импортировать и подключить</string>
     <string name="paste_clipboard">Вставить</string>
+    <string name="profiles_add_hint">QR-код или ссылка из буфера</string>
     <string name="scan_qr">Сканировать QR-код</string>
     <string name="qr_scanner_hint">Поместите QR-код внутрь рамки</string>
     <string name="stop_scan">Остановить сканирование</string>

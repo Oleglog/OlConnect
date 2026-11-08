@@ -129,48 +129,54 @@ class ProfilesFragment : Fragment() {
         subscriptions.forEach { binding.profileList.addView(subscriptionCard(it)) }
     }
 
+    /**
+     * One saved source as a tile: name with its action on the first line, the
+     * facts in mono under it, icons for the rest. The mockup's rows carry the
+     * same three lines — name, numbers, action — without a card around each one.
+     */
     private fun subscriptionCard(subscription: SubscriptionSummary): View = MaterialCardView(requireContext()).apply {
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { bottomMargin = resources.getDimensionPixelSize(R.dimen.space_3) }
-        radius = resources.getDimension(R.dimen.corner_quiet)
+        ).apply { topMargin = resources.getDimensionPixelSize(R.dimen.space_2) }
+        radius = resources.getDimension(R.dimen.corner_card).toFloat()
         cardElevation = 0f
         strokeWidth = resources.getDimensionPixelSize(R.dimen.card_border)
-        strokeColor = resolveColor(com.google.android.material.R.attr.colorOutline)
-        setCardBackgroundColor(resolveColor(com.google.android.material.R.attr.colorSurface))
+        strokeColor = ColorStateList.valueOf(resolveColor(com.google.android.material.R.attr.colorOutlineVariant))
+        setCardBackgroundColor(resolveColor(com.google.android.material.R.attr.colorSurfaceContainer))
         addView(LinearLayout(requireContext()).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16.dp, 16.dp, 8.dp, 12.dp)
-            addView(TextView(requireContext()).apply {
-                text = subscription.name
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
-            })
-            addView(TextView(requireContext()).apply {
-                text = subscriptionSummary(subscription)
-                setPadding(0, 4.dp, 0, 12.dp)
-                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
-                setTextColor(resolveColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
-            })
+            setPadding(
+                resources.getDimensionPixelSize(R.dimen.tile_padding),
+                resources.getDimensionPixelSize(R.dimen.tile_padding),
+                resources.getDimensionPixelSize(R.dimen.space_2),
+                resources.getDimensionPixelSize(R.dimen.space_1),
+            )
             addView(LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
+                addView(TextView(requireContext()).apply {
+                    text = subscription.name
+                    setTextAppearance(R.style.TextAppearance_Olcrtc_TitleMedium)
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 val progress = ProgressBar(requireContext()).apply {
                     visibility = View.GONE
                     isIndeterminate = true
                 }
-                val update = MaterialButton(
-                    requireContext(),
-                    null,
-                    com.google.android.material.R.attr.materialButtonOutlinedStyle,
-                ).apply {
-                    setText(R.string.subscription_update_now)
-                    cornerRadius = 8.dp
-                    setOnClickListener { updateSubscription(subscription.id, this, progress) }
-                }
+                addView(progress, LinearLayout.LayoutParams(18.dp, 18.dp).apply { marginEnd = 8.dp })
+                val update = ghostButton(R.string.subscription_update_now)
+                update.setOnClickListener { updateSubscription(subscription.id, update, progress) }
                 addView(update)
-                addView(progress, LinearLayout.LayoutParams(24.dp, 24.dp).apply { marginStart = 8.dp })
-                addView(View(requireContext()), LinearLayout.LayoutParams(0, 0, 1f))
+            })
+            addView(TextView(requireContext()).apply {
+                text = subscriptionSummary(subscription)
+                setPadding(0, 2.dp, 0, 4.dp)
+                setTextAppearance(R.style.TextAppearance_Olcrtc_NumSmall)
+                setTextColor(resolveColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
+            })
+            addView(LinearLayout(requireContext()).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.END
                 addView(iconButton(R.drawable.ic_edit_20, R.string.edit) {
                     editSubscription(subscription)
                 })
@@ -180,6 +186,25 @@ class ProfilesFragment : Fragment() {
             })
         })
     }
+
+    /** A small outlined action, 32 px tall: the mockup's `.btn-ghost.btn-sm`. */
+    private fun ghostButton(textRes: Int): MaterialButton =
+        MaterialButton(
+            requireContext(),
+            null,
+            com.google.android.material.R.attr.materialButtonOutlinedStyle,
+        ).apply {
+            setText(textRes)
+            setTextAppearance(R.style.TextAppearance_Olcrtc_LabelStrong)
+            minWidth = 0
+            insetTop = 0
+            insetBottom = 0
+            cornerRadius = resources.getDimensionPixelSize(R.dimen.corner_button)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                resources.getDimensionPixelSize(R.dimen.space_6),
+            )
+        }
 
     private fun iconButton(iconRes: Int, descriptionRes: Int, action: () -> Unit): AppCompatImageButton =
         AppCompatImageButton(requireContext()).apply {
