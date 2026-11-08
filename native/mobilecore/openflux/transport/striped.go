@@ -205,7 +205,7 @@ var (
 	// reorder this relay produces, still bounded for a genuinely lost piece.
 	// STRIPE_HOLE_MS stays as the older name; STRIPE_REORDER_MS is the knob to
 	// sweep on the stand.
-	holeDeadline = envMs("STRIPE_HOLE_MS", envMs("STRIPE_REORDER_MS", 15000))
+	holeDeadline = envMs("STRIPE_HOLE_MS", envIntOr("STRIPE_REORDER_MS", 15000))
 	// CoDel on the shared send queue: when the oldest frame has waited longer
 	// than codelTarget for a whole codelInterval, drop at the head, faster
 	// while it lasts. The carrier's rate swings by half from second to second
