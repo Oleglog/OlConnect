@@ -90,7 +90,7 @@ func TestHoldExpiresWithoutAnExternalEvent(t *testing.T) {
 	if sentFrame(q.pull(0, 10, start), "lost") {
 		t.Fatal("retransmission went out during the hold")
 	}
-	if sentFrame(q.pull(0, 10, start.Add(silenceHold+time.Millisecond)), "lost") {
+	if !sentFrame(q.pull(0, 10, start.Add(silenceHold+time.Millisecond)), "lost") {
 		t.Fatal("retransmission did not resume after the hold expired")
 	}
 }
