@@ -115,11 +115,6 @@ class ConnectionFragment : Fragment() {
     // so it survives an app restart even though the screen only writes the ring.
     private var recentSessions: List<RailSession> = emptyList()
     private var railRecordedMinute = -1L
-    // One-second speed sample: the byte counters are cumulative, so the rate is
-    // the delta since the previous tick, which is what the tile shows.
-    private var speedSampleAt = 0L
-    private var speedSampleBytes = 0L
-    private var currentDownSpeed = 0L
     @Volatile private var dashboardLoadInFlight = false
     private val dashboardTicker = object : Runnable {
         override fun run() {
@@ -217,7 +212,7 @@ class ConnectionFragment : Fragment() {
                 }
             }
         }
-        updateConnectPulse()
+        updateConnectGlow()
     }
 
     override fun onStart() {
@@ -250,8 +245,6 @@ class ConnectionFragment : Fragment() {
     }
 
     override fun onDestroyView() {
-        pulseAnimator?.cancel()
-        pulseAnimator = null
         ticker.removeCallbacks(dashboardTicker)
         binding.profileList.adapter = null
         _binding = null
@@ -835,8 +828,8 @@ class ConnectionFragment : Fragment() {
             activityHost.pendingCaptchaUrl()?.let(::offerCaptcha)
         }
         updateConnectButtonText()
-        applyingPulse = state == VpnState.CONNECTED
-        updateConnectPulse()
+        glowOn = state == VpnState.CONNECTED
+        updateConnectGlow()
         updateActionAvailability()
         updateLatencyAction()
         updateInfoTile()
@@ -948,35 +941,17 @@ class ConnectionFragment : Fragment() {
         return scale != 0f
     }
 
-    private var applyingPulse = false
-    private var pulseAnimator: android.animation.ObjectAnimator? = null
+    // The halo is a static glow: movement in this design lives in the state
+    // transition itself, so the intensity setting still decides the alpha but
+    // nothing breathes behind the tile.
+    private var glowOn = false
 
-    private fun updateConnectPulse() {
+    private fun updateConnectGlow() {
         if (_binding == null) return
         val halo = binding.connectionHalo
-        pulseAnimator?.cancel()
-        pulseAnimator = null
-        val intensity = activityHost.currentAppearance().glowIntensity
-        val targetAlpha = connectionGlowAlpha(intensity, applyingPulse)
-        if (!applyingPulse || !animationsEnabled() || targetAlpha == 0f) {
-            halo.alpha = targetAlpha
-            halo.scaleX = 1f
-            halo.scaleY = 1f
-            return
-        }
-        // ponytail: ObjectAnimator used because ViewPropertyAnimator has no repeat.
-        android.animation.ObjectAnimator.ofPropertyValuesHolder(
-            halo,
-            android.animation.PropertyValuesHolder.ofFloat(View.ALPHA, targetAlpha * 0.62f, targetAlpha),
-            android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, 0.94f, 1.06f),
-            android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.94f, 1.06f),
-        ).apply {
-            duration = 2_800L
-            repeatMode = android.animation.ValueAnimator.REVERSE
-            repeatCount = android.animation.ValueAnimator.INFINITE
-            start()
-            pulseAnimator = this
-        }
+        halo.alpha = connectionGlowAlpha(activityHost.currentAppearance().glowIntensity, glowOn)
+        halo.scaleX = 1f
+        halo.scaleY = 1f
     }
 
     private fun vpnStateText(state: VpnState, stage: ConnectionStage, reconnectAttempt: Int): String = when (state) {
@@ -1120,7 +1095,9 @@ class ConnectionFragment : Fragment() {
         binding.todayDownload.text = getString(R.string.traffic_rate_format, formatBytes(downSpeed))
         binding.todayUpload.text = getString(R.string.traffic_rate_format, formatBytes(upSpeed))
         binding.todayTotal.text = formatBytes(todayBytesUp + todayBytesDown + liveUp + liveDown)
-        binding.connectionRate.text = formatBytes(currentRatePerSecond(traffic))
+        binding.connectionRate.text = formatBytes(
+            if (currentState == VpnState.CONNECTED) traffic?.get(3)?.coerceAtLeast(0) ?: 0 else 0,
+        )
         binding.connectionReceived.text = formatBytes(todayBytesDown + liveDown)
         binding.connectionLatency.text = lastLatencyMillis
             ?.takeIf { lastLatencyReference == selectedReference() }
@@ -1135,32 +1112,6 @@ class ConnectionFragment : Fragment() {
                 getString(R.string.connection_tap_to_start)
             }
         updateRail()
-    }
-
-    /**
-     * The received bytes are cumulative, so the rate on the tile is the delta
-     * since the previous one-second tick of the dashboard ticker — the same
-     * counters the service already keeps for the traffic row, sampled here.
-     */
-    private fun currentRatePerSecond(traffic: LongArray?): Long {
-        if (currentState != VpnState.CONNECTED) {
-            speedSampleAt = 0L
-            speedSampleBytes = 0L
-            currentDownSpeed = 0L
-            return 0L
-        }
-        val now = SystemClock.elapsedRealtime()
-        val downBytes = traffic?.get(1)?.coerceAtLeast(0) ?: 0L
-        val elapsed = now - speedSampleAt
-        val previous = speedSampleBytes
-        speedSampleAt = now
-        speedSampleBytes = downBytes
-        currentDownSpeed = if (previous > 0 && elapsed in 250..3_000 && downBytes >= previous) {
-            (downBytes - previous) * 1_000 / elapsed
-        } else {
-            0L
-        }
-        return currentDownSpeed
     }
 
     /**
