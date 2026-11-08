@@ -82,7 +82,9 @@ type StripedTransport struct {
 
 	// peerSilent is set while the far side has sent nothing back (no ack, no
 	// piece) for peerSilentAfter with pieces in flight. The carrier's sockets
-	// stay open either way - that is how traffic died with lanes up=1/1.
+	// stay open either way - that is how traffic died with lanes up=1/1. Only
+	// retransmissions are held then: holding new data as well left both sides
+	// with nothing to ack, a mutual mute.
 	peerSilent atomic.Bool
 }
 
@@ -231,11 +233,20 @@ const (
 var rtxPerSec = float64(envIntOr("STRIPE_RTX_PER_SEC", 12))
 
 // Peer silence: acks (or any received piece) are the only honest sign the far
-// side is there. The rooms can be open with nobody behind them, and then the
-// sender used to keep writing at full speed into the void.
+// side is there. Holding the *retransmissions* then is safe; holding new data
+// is not - both sides go quiet, nothing is left to ack, and the pair sits in a
+// mutual mute for tens of seconds (seen on the stand: 33-44 s of silence, then
+// a moment of traffic, over and over).
+var (
+	silenceHoldOn   = os.Getenv("STRIPE_SILENCE_HOLD") != "0"
+	peerSilentAfter = envMs("STRIPE_SILENCE_MS", 4000)
+)
+
 const (
-	peerSilentAfter      = 4 * time.Second
 	peerSilentMinInflight = 8
+	// silenceHold bounds a hold: after it retransmissions resume whatever the
+	// silence says, so a lost ack cannot stop the link by itself.
+	silenceHold = 2 * time.Second
 )
 
 // laneReorderSlack: a piece counts as lost once a piece that left more than
@@ -662,8 +673,9 @@ func peerSilentNow(quiet time.Duration, inflight int) bool {
 // pieces are the only proof it is there: a room carrier's sockets stay open
 // with nobody behind them, and the sender used to keep writing at full speed
 // into the void (the phone's session: rx=0 for good, lanes up=1/1, no error).
-// While silent the sender holds everything but the ack, and the lanes that can
-// rejoin do so.
+// While silent only retransmissions are held, for at most silenceHold, and the
+// lanes that can rejoin do so: holding new data too made both sides go quiet
+// and left nothing to ack, which is a mutual mute, not a recovery.
 func (s *StripedTransport) silenceLoop() {
 	t := time.NewTicker(250 * time.Millisecond)
 	defer t.Stop()
@@ -691,14 +703,16 @@ func (s *StripedTransport) silenceLoop() {
 			continue
 		}
 		s.peerSilent.Store(silent)
-		s.snd.setSilent(silent)
+		if silenceHoldOn {
+			s.snd.setHold(silent, now)
+		}
 		lanes, _ := s.snapshotLanes()
 		if !silent {
 			utils.Infof("[STRIPE] peer is back after %s, resuming", now.Sub(aliveAt).Round(time.Millisecond))
 			continue
 		}
-		utils.Infof("[STRIPE] peer silent for %s with %d pieces in flight, holding the link",
-			now.Sub(aliveAt).Round(time.Millisecond), inflight)
+		utils.Infof("[STRIPE] peer silent for %s with %d pieces in flight, holding retransmits for up to %s (new data keeps flowing)",
+			now.Sub(aliveAt).Round(time.Millisecond), inflight, silenceHold)
 		for _, l := range lanes {
 			if ss, ok := l.(SilenceSignaler); ok {
 				ss.PeerSilentFor(now.Sub(aliveAt), inflight)
@@ -760,9 +774,9 @@ func (s *StripedTransport) statsLoop() {	t := time.NewTicker(5 * time.Second)
 		}
 		utils.Packetf("[STRIPE] per-lane %s | arrival gaps 1:%d 2-3:%d 4-7:%d 8-15:%d 16-31:%d 32-63:%d 64-127:%d 128+:%d",
 			strings.Join(per, " "), gaps[0], gaps[1], gaps[2], gaps[3], gaps[4], gaps[5], gaps[6], gaps[7])
-		utils.Packetf("[STRIPE] farWatches=%d lanes up=%d/%d | rx delivered=%d skipped=%d late=%d buffered=%d acks=%d | tx pieces=%d rtx=%d (rto %d) dups=%d gaveUp=%d inflight=%d queue=%dKB/%dms codelDrop=%d sendDropped=%d acks=%d srtt=%s rto=%s | uplinkLoss=%.1f%%",
+		utils.Packetf("[STRIPE] farWatches=%d lanes up=%d/%d | rx delivered=%d skipped=%d late=%d buffered=%d acks=%d | tx pieces=%d rtx=%d (rto %d) dups=%d gaveUp=%d holds=%d inflight=%d queue=%dKB/%dms codelDrop=%d sendDropped=%d acks=%d srtt=%s rto=%s | uplinkLoss=%.1f%%",
 			nw, up, len(lanes), d, sk, late, buffered, s.ackSent.Load(),
-			ss.pieces, ss.rtx, ss.rtxTimeout, ss.dups, ss.gaveUp, ss.inflight, ss.queueBytes/1024, ss.queueDelay.Milliseconds(), ss.codelDrops, s.dropped.Load(), s.ackRecv.Load(),
+			ss.pieces, ss.rtx, ss.rtxTimeout, ss.dups, ss.gaveUp, ss.holds, ss.inflight, ss.queueBytes/1024, ss.queueDelay.Milliseconds(), ss.codelDrops, s.dropped.Load(), s.ackRecv.Load(),
 			ss.srtt.Round(time.Millisecond), ss.rto.Round(time.Millisecond), loss*100)
 	}
 }
@@ -938,10 +952,12 @@ type sender struct {
 	gaveUpAt     time.Time
 
 	// rtxBudget is the retransmission allowance, refilled at rtxPerSec;
-	// silent stops new sends and retries while the peer is not answering.
+	// holdUntil stops only retransmissions while the peer looks silent - new
+	// data keeps flowing, or both sides fall into a mutual mute.
 	rtxBudget float64
 	rtxAt     time.Time
-	silent    bool
+	holdUntil time.Time
+	holds     uint64
 
 	pieceBytes  int  // max payload bytes per piece (defaults to stripePieceBytes)
 	noOrderLoss bool // when true, disable single-lane FIFO out-of-order loss inference
@@ -1016,11 +1032,9 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 		out = append(out, q.ack)
 		q.ack = nil
 	}
-	if q.silent {
-		// Nothing comes back: sending more only feeds the retransmit storm.
-		// The ack above still goes out, so the far side learns what arrived.
-		return out
-	}
+	// A hold stops retransmissions, never new data: holding both directions at
+	// once is a mutual mute, because an ack needs something to ack.
+	holding := !q.holdUntil.IsZero() && now.Before(q.holdUntil)
 	ls := &q.lane[i]
 	if !q.noOrderLoss {
 		if allowed := ls.allow(now); max-len(out) > allowed {
@@ -1046,7 +1060,7 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 		max = len(out) + 1 // one new piece: if it arrives, the lane is back
 	}
 	start := len(out)
-	if !dead && len(q.rtxQ) > 0 {
+	if !dead && !holding && len(q.rtxQ) > 0 {
 		q.refillRtx(now)
 		// Resend on another lane than the one that lost it when there is
 		// one: losses come in bursts, and the lane may still be in one.
@@ -1467,11 +1481,19 @@ func (q *sender) inflightPieces() int {
 	return int(q.seq + 1 - q.low)
 }
 
-// setSilent stops or resumes sending: with no acks coming back there is no
-// point writing at all.
-func (q *sender) setSilent(v bool) {
+// setHold stops retransmissions for silenceHold while the peer looks silent;
+// new data keeps going out, so the far side always has something to ack and the
+// pair cannot lock itself in silence.
+func (q *sender) setHold(hold bool, now time.Time) {
 	q.mu.Lock()
-	q.silent = v
+	if hold {
+		if q.holdUntil.IsZero() || !now.Before(q.holdUntil) {
+			q.holds++
+		}
+		q.holdUntil = now.Add(silenceHold)
+	} else {
+		q.holdUntil = time.Time{}
+	}
 	q.mu.Unlock()
 }
 
@@ -1538,7 +1560,7 @@ func (q *sender) backlogged() bool {
 const busyDelay = 30 * time.Millisecond
 
 type senderStats struct {
-	pieces, rtx, rtxTimeout, codelDrops, dups, gaveUp uint64
+	pieces, rtx, rtxTimeout, codelDrops, dups, gaveUp, holds uint64
 	inflight, queueBytes                              int
 	queueDelay, srtt, rto                             time.Duration
 	laneLoss, laneRate                                [maxStripeLanes]float64
@@ -1548,7 +1570,7 @@ type senderStats struct {
 func (q *sender) snapshot() senderStats {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	st := senderStats{pieces: q.pieces, rtx: q.rtx, rtxTimeout: q.rtxTime, codelDrops: q.codelDrops, dups: q.dupSent, gaveUp: q.gaveUp,
+	st := senderStats{pieces: q.pieces, rtx: q.rtx, rtxTimeout: q.rtxTime, codelDrops: q.codelDrops, dups: q.dupSent, gaveUp: q.gaveUp, holds: q.holds,
 		inflight: int(q.seq + 1 - q.low), queueBytes: q.queueBytes, srtt: q.srtt, rto: q.rto()}
 	for i := range q.lane {
 		st.laneLoss[i], st.laneRate[i], st.laneDead[i] = q.lane[i].loss, q.lane[i].rate, q.lane[i].dead(time.Now())
