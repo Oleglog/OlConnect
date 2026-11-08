@@ -18,6 +18,7 @@ func (s *roomTransportStub) Stats() TransportStats     { return TransportStats{}
 func (s *roomTransportStub) RoomList() string          { return s.room }
 func (s *roomTransportStub) OnRoomList(f func(string)) { s.onRoom = f }
 func (s *roomTransportStub) PreferredBatchBytes() int  { return 1234 }
+func (s *roomTransportStub) PreferredBatchLingerMs() int { return 200 }
 func (s *roomTransportStub) FetchCookies() (map[string]string, error) {
 	return s.cookies, nil
 }
@@ -48,6 +49,9 @@ func TestStripedRoomTransportForwardsControlMethods(t *testing.T) {
 	}
 	if got := wrapped.PreferredBatchBytes(); got != 1234 {
 		t.Fatalf("PreferredBatchBytes() = %d, want 1234", got)
+	}
+	if got := wrapped.PreferredBatchLingerMs(); got != 200 {
+		t.Fatalf("PreferredBatchLingerMs() = %d, want 200", got)
 	}
 }
 
