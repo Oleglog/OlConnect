@@ -590,9 +590,8 @@
                             android:id="@+id/glow_value"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:fontFamily="monospace"
-                            android:textAppearance="?attr/textAppearanceLabelLarge"
-                            android:textColor="?attr/colorPrimary" />
+                            android:textAppearance="@style/TextAppearance.Olcrtc.Num"
+                            android:textColor="?attr/colorOnSurface" />
                     </LinearLayout>
 
                     <com.google.android.material.slider.Slider

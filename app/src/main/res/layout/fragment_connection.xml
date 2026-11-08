@@ -478,7 +478,6 @@
                             style="?attr/materialButtonOutlinedStyle"
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:fontFamily="monospace"
                             android:insetTop="0dp"
                             android:insetBottom="0dp"
                             android:minWidth="0dp"
