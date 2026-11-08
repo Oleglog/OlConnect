@@ -49,8 +49,13 @@ const (
 	// (измерено 2026-11-08: 49152 байта проходят, 49153 уже нет).
 	boardsMaxObjectBytes = 48 * 1024
 
-	// Батч под этот потолок с запасом на обвязку объекта.
-	boardsBatchBytes = 48000
+	// Батч под этот потолок с запасом на обвязку объекта. Батчер флашит, когда
+	// очередь ПЕРЕВАЛИЛА за это значение, то есть к полезной нагрузке успевает
+	// добавиться ещё один сегмент: 45000 + 1400 = 46400 уходит в base64 как
+	// ~61.9k символов и остаётся под потолком 65536. При 48000 в объект
+	// влезало ~49400, base64 выходил за 65536 и доска отвечала
+	// PAYLOAD_TOO_LARGE.
+	boardsBatchBytes = 45000
 
 	// securityCode of the refusals we act on. The board answers a refused
 	// modify-objects with {"error":{"code":200,"securityCode":...}}.
@@ -75,7 +80,7 @@ const (
 	// names the real budget.
 	boardsRateStart = 5.0
 	boardsRateMin   = 2.0
-	boardsRateMax   = 48.0
+	boardsRateMax   = 120.0
 	boardsRateGrow  = 0.5
 	boardsRateCut   = 0.5
 	boardsRateHold  = 250 * time.Millisecond
