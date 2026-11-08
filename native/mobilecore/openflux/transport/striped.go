@@ -238,7 +238,13 @@ var rtxPerSec = float64(envIntOr("STRIPE_RTX_PER_SEC", 12))
 // mutual mute for tens of seconds (seen on the stand: 33-44 s of silence, then
 // a moment of traffic, over and over).
 var (
-	silenceHoldOn   = os.Getenv("STRIPE_SILENCE_HOLD") != "0"
+	// Off by default: on the stand the hold cost more than it saved. Two peers
+	// that both hold retransmissions keep losing the pieces the other side is
+	// waiting for, and throughput collapses to a fraction of the link even
+	// though the detection itself is right. The detector still logs and still
+	// signals the carrier; STRIPE_SILENCE_HOLD=1 turns the hold back on for
+	// experiments.
+	silenceHoldOn   = os.Getenv("STRIPE_SILENCE_HOLD") == "1"
 	peerSilentAfter = envMs("STRIPE_SILENCE_MS", 4000)
 )
 
