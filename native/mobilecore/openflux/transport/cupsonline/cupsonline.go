@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -107,6 +108,21 @@ type CupsonlineConfig struct {
 	// often.
 	RoomReplaceMinInterval time.Duration
 
+	// AIMD write pacer. The relay answers 429 "Превышено допустимое число
+	// отправок запроса" when a room takes too many events per second, and a
+	// refused write never arrives - the peer sees silence and the stripe
+	// retransmits what it already sent. Instead of a guessed interval each
+	// channel finds its budget: grow on every clean second, cut and hold on a
+	// refusal, recover slowly. The interval also respects a byte rate, so a big
+	// message cannot be written faster than the relay swallows it.
+	RateStart float64
+	RateMin   float64
+	RateMax   float64
+	RateGrow  float64
+	RateCut   float64
+	RateHold  time.Duration
+	RateBytes int
+
 	StatsInterval time.Duration
 }
 
@@ -180,6 +196,14 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// burst of replacements would look exactly like the abuse it blocks.
 		RoomReplaceMinInterval: 30 * time.Second,
 
+		RateStart: cupsEnvFloat("OPENFLUX_CUPS_RATE_START", 40),
+		RateMin:   cupsEnvFloat("OPENFLUX_CUPS_RATE_MIN", 5),
+		RateMax:   cupsEnvFloat("OPENFLUX_CUPS_RATE_MAX", 200),
+		RateGrow:  cupsEnvFloat("OPENFLUX_CUPS_RATE_GROW", 1.05),
+		RateCut:   cupsEnvFloat("OPENFLUX_CUPS_RATE_CUT", 0.5),
+		RateHold:  time.Duration(cupsEnvInt("OPENFLUX_CUPS_RATE_HOLD_MS", 2000)) * time.Millisecond,
+		RateBytes: cupsEnvInt("OPENFLUX_CUPS_RATE_BYTES", 32768),
+
 		StatsInterval: 5 * time.Second,
 	}
 }
@@ -190,6 +214,16 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 func cupsEnvInt(name string, def int) int {
 	if v := os.Getenv(name); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return def
+}
+
+// cupsEnvFloat reads a float knob (rates, AIMD factors), falling back to def.
+func cupsEnvFloat(name string, def float64) float64 {
+	if v := os.Getenv(name); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil && parsed > 0 {
 			return parsed
 		}
 	}
@@ -612,6 +646,19 @@ type cupsWS struct {
 	goneDelay   time.Duration // run's goroutine only
 	lastSend    time.Time     // sendLoop goroutine only; paces messages
 	onRoomState func()
+
+	// AIMD write pacer state, owned by sendLoop: rate in writes/s, the moment
+	// of the last change, the refusal counter already accounted for, and the
+	// hold a 429 puts on writes.
+	rate        float64
+	rateAt      time.Time
+	rateSeen    uint64
+	rateHold    time.Time
+	rateLogAt   time.Time
+	rateCutFrom float64
+	rateSuspect bool
+	// ratePub mirrors rate for the stats goroutine (math.Float64bits).
+	ratePub atomic.Uint64
 
 	// replace, set by the transport on the exit side, swaps this channel's
 	// closed room for a fresh one; nil when nobody may create rooms. pool
@@ -1047,7 +1094,7 @@ func (w *cupsWS) sendBatch(batch [][]byte) error {
 	// stitches them back together in order.
 	for off := 0; off < len(blob); off += w.config.MaxMessageData {
 		end := min(off+w.config.MaxMessageData, len(blob))
-		if err := w.pace(); err != nil {
+		if err := w.pace(end - off); err != nil {
 			return err
 		}
 		if err := w.sendChunk(blob[off:end]); err != nil {
@@ -1060,20 +1107,68 @@ func (w *cupsWS) sendBatch(batch [][]byte) error {
 	return nil
 }
 
-// pace waits out the rest of SendInterval since the last message, so the
-// channel never floods the server. Returns errStopped if the transport is
-// stopped while waiting.
-func (w *cupsWS) pace() error {
-	if w.config.SendInterval <= 0 {
-		return nil
+// pace waits out the AIMD interval for a message of size bytes: 1/rate, or
+// size/RateBytes when the message is big, and never less than SendInterval.
+// Returns errStopped if the transport is stopped while waiting.
+func (w *cupsWS) pace(size int) error {
+	if w.rate <= 0 {
+		w.rate = w.config.RateStart
 	}
-	if d := w.config.SendInterval - time.Since(w.lastSend); d > 0 {
+	w.adaptRate(time.Now())
+	interval := time.Duration(float64(time.Second) / w.rate)
+	if w.config.RateBytes > 0 && size > 0 {
+		if byBytes := time.Duration(float64(time.Second) * float64(size) / float64(w.config.RateBytes)); byBytes > interval {
+			interval = byBytes
+		}
+	}
+	if interval < w.config.SendInterval {
+		interval = w.config.SendInterval
+	}
+	if hold := time.Until(w.rateHold); hold > 0 {
+		if !sleepCtx(w.ctx, hold) {
+			return errStopped
+		}
+	}
+	if d := interval - time.Since(w.lastSend); d > 0 {
 		if !sleepCtx(w.ctx, d) {
 			return errStopped
 		}
 	}
 	w.lastSend = time.Now()
 	return nil
+}
+
+// adaptRate is the AIMD step on the write path: a new 429 cuts the rate and
+// holds writes for RateHold, a clean second grows it towards RateMax. The relay
+// never says what the budget is, so it is found, not guessed.
+func (w *cupsWS) adaptRate(now time.Time) {
+	refused := w.stats.writeRefused.Load()
+	if refused > w.rateSeen {
+		w.rateSeen = refused
+		if !w.rateSuspect {
+			w.rateCutFrom = w.rate
+			w.rateSuspect = true
+		}
+		w.rate = max(w.rate*w.config.RateCut, w.config.RateMin)
+		w.ratePub.Store(math.Float64bits(w.rate))
+		w.rateHold = now.Add(w.config.RateHold)
+		w.rateAt = now
+		if now.Sub(w.rateLogAt) > time.Second {
+			w.rateLogAt = now
+			utils.Infof("[CUPS] rate -> %.0f/s (429, refused %d)", w.rate, refused)
+		}
+		return
+	}
+	if now.Sub(w.rateAt) < time.Second || w.rate >= w.config.RateMax {
+		return
+	}
+	w.rate = min(w.rate*w.config.RateGrow, w.config.RateMax)
+	w.rateAt = now
+	w.ratePub.Store(math.Float64bits(w.rate))
+	if w.rateSuspect && w.rate >= w.rateCutFrom {
+		w.rateSuspect = false
+		utils.Infof("[CUPS] rate -> %.0f/s (recovered)", w.rate)
+	}
 }
 
 // sendChunk sends one message: a 2-byte length of the chunk, then the chunk,
@@ -1414,9 +1509,11 @@ func (t *CupsonlineTransport) Start() error {
 			sendQueue:   make(chan []byte, t.config.SendQueueSize),
 			pongCh:      make(chan struct{}, 1),
 			stats:       &channelStats{idx: i, roomUUID: s.id},
+			rate:        t.config.RateStart,
 		}
 		// Command ids 1 and 2 are connect and subscribe.
 		ws.rpcID.Store(2)
+		ws.ratePub.Store(math.Float64bits(ws.rate))
 		if s.auth != nil {
 			ws.authPtr.Store(s.auth)
 			ws.session = s.auth.httpClient
@@ -1856,12 +1953,14 @@ func (t *CupsonlineTransport) statsLoop() {
 				totalBytesSent += bs
 				totalBytesRecv += br
 
-				utils.Debugf("[CH-%02d %s] tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  drop=%d  reconn=%d  conn=%v",
+				utils.Debugf("[CH-%02d %s] tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  rate=%.0f/s refused=%d  drop=%d  reconn=%d  conn=%v",
 					i, shortRoom(ws.room()),
 					dS/uint64(t.config.StatsInterval.Seconds()),
 					float64(dBS)/t.config.StatsInterval.Seconds()/1024,
 					dR/uint64(t.config.StatsInterval.Seconds()),
 					float64(dBR)/t.config.StatsInterval.Seconds()/1024,
+					math.Float64frombits(ws.ratePub.Load()),
+					ws.stats.writeRefused.Load(),
 					ws.stats.dropped.Load(),
 					ws.stats.reconnects.Load(),
 					ws.connected.Load(),
