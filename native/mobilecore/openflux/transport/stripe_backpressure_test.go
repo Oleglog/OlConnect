@@ -103,7 +103,7 @@ func newSenderWithQueuedPiece(t *testing.T, at time.Time) *sender {
 	q.srtt, q.rttvar = 200*time.Millisecond, 20*time.Millisecond
 	q.seq, q.low = 200, 101
 	e := &q.ring[101%txRingSize]
-	*e = txEntry{seq: 101, buf: append([]byte(stripeMagic), []byte("lost")...), ok: true, queued: true, lane: 0, at: at}
+	*e = txEntry{seq: 101, buf: append([]byte{stripeMagic}, []byte("lost")...), ok: true, queued: true, lane: 0, at: at}
 	q.rtxQ = []uint32{101}
 	return q
 }
