@@ -122,8 +122,7 @@ func sentAny(frames [][]byte) bool {
 }
 
 // Silence means quiet AND work outstanding: an idle tunnel is idle, not dead.
-func TestPeerSilentNeedsInflightWork(t *testing.T) {
-	t.Parallel()
+func TestPeerSilentNeedsInflightWork(t *testing.T) {	t.Parallel()
 	if !peerSilentNow(peerSilentAfter+time.Second, peerSilentMinInflight) {
 		t.Fatal("quiet with pieces in flight should count as silent")
 	}
