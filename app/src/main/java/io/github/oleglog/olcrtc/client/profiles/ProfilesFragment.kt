@@ -142,7 +142,7 @@ class ProfilesFragment : Fragment() {
         radius = resources.getDimension(R.dimen.corner_card).toFloat()
         cardElevation = 0f
         strokeWidth = resources.getDimensionPixelSize(R.dimen.card_border)
-        strokeColor = ColorStateList.valueOf(resolveColor(com.google.android.material.R.attr.colorOutlineVariant))
+        strokeColor = resolveColor(com.google.android.material.R.attr.colorOutlineVariant)
         setCardBackgroundColor(resolveColor(com.google.android.material.R.attr.colorSurfaceContainer))
         addView(LinearLayout(requireContext()).apply {
             orientation = LinearLayout.VERTICAL
