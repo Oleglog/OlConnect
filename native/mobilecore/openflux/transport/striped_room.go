@@ -10,6 +10,13 @@ import "time"
 const (
 	maxRoomPieceBytes = 65535 - stripeHeader - 1
 	roomAckInterval   = 50 * time.Millisecond
+
+	// roomHealthDeadline: a room carrier whose rooms are up but silent (the
+	// relay keeps the websockets open for a peer that is gone) must not look
+	// healthy - that is how Cups traffic died on the stand and never came back.
+	// With every lane down this long the stripe stops itself: the CLI exits and
+	// its supervisor rejoins the pool, the app reconnects with a fresh profile.
+	roomHealthDeadline = 90 * time.Second
 )
 
 // StripedRoomTransport adds the reliable striped link layer to a room-based
@@ -30,6 +37,7 @@ func NewStripedRoomTransport(inner Transport) *StripedRoomTransport {
 	st.ackEvery = roomAckInterval
 	st.snd.pieceBytes = maxRoomPieceBytes
 	st.snd.noOrderLoss = true
+	st.SetHealthDeadline(roomHealthDeadline)
 	return &StripedRoomTransport{
 		StripedTransport: st,
 		inner:            inner,
