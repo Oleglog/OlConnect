@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,27 +57,68 @@ func TestRtxBudgetCapsTheFlood(t *testing.T) {
 	}
 }
 
-// While the peer is silent the sender keeps its data and retries: only the ack
-// goes out, so the tunnel stops feeding the storm.
-func TestSilentSenderSendsNothingButTheAck(t *testing.T) {
+// A hold stops retransmissions only. New data must keep flowing: with both
+// sides holding their data there is nothing left to ack, and the pair sits in a
+// mutual mute - which is exactly what the stand showed (33-44 s of silence,
+// then a moment of traffic, over and over).
+func TestHoldStopsOnlyRetransmits(t *testing.T) {
 	t.Parallel()
-	q := &sender{}
-	q.init()
-	q.ack = []byte("ack")
-	q.setSilent(true)
+	q := newSenderWithQueuedPiece(t, time.Now())
+	now := time.Now()
 
-	out := q.pull(0, 100, time.Now())
-	if len(out) != 1 || string(out[0]) != "ack" {
-		t.Fatalf("silent pull = %d frame(s), want only the ack", len(out))
-	}
-
-	q.setSilent(false)
-	if !q.enqueue([]byte("frame")) {
+	q.setHold(true, now)
+	if !q.enqueue([]byte("fresh")) {
 		t.Fatal("enqueue refused on an empty queue")
 	}
-	if len(q.pull(0, 100, time.Now())) == 0 {
-		t.Fatal("after the peer is back the sender still sends nothing")
+	out := q.pull(0, 10, now)
+	if sentFrame(out, "lost") {
+		t.Fatal("the held sender retransmitted a piece, the storm is not stopped")
 	}
+	if !sentAny(out) {
+		t.Fatal("the held sender stopped sending new data: that is the mutual mute")
+	}
+}
+
+// The hold expires on its own: retransmissions come back after silenceHold even
+// though nothing has happened - no ack, no peer, no external event.
+func TestHoldExpiresWithoutAnExternalEvent(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	q := newSenderWithQueuedPiece(t, start)
+
+	q.setHold(true, start)
+	if sentFrame(q.pull(0, 10, start), "lost") {
+		t.Fatal("retransmission went out during the hold")
+	}
+	if sentFrame(q.pull(0, 10, start.Add(silenceHold+time.Millisecond)), "lost") {
+		t.Fatal("retransmission did not resume after the hold expired")
+	}
+}
+
+// newSenderWithQueuedPiece has one piece in flight, waiting to be retransmitted.
+func newSenderWithQueuedPiece(t *testing.T, at time.Time) *sender {
+	t.Helper()
+	q := &sender{}
+	q.init()
+	q.srtt, q.rttvar = 200*time.Millisecond, 20*time.Millisecond
+	q.seq, q.low = 200, 101
+	e := &q.ring[101%txRingSize]
+	*e = txEntry{seq: 101, buf: append([]byte(stripeMagic), []byte("lost")...), ok: true, queued: true, lane: 0, at: at}
+	q.rtxQ = []uint32{101}
+	return q
+}
+
+func sentFrame(frames [][]byte, marker string) bool {
+	for _, f := range frames {
+		if strings.Contains(string(f), marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func sentAny(frames [][]byte) bool {
+	return len(frames) > 0
 }
 
 // Silence means quiet AND work outstanding: an idle tunnel is idle, not dead.
