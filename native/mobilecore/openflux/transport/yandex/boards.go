@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	mrand "math/rand"
 	"net/http"
 	"net/http/cookiejar"
@@ -50,7 +51,165 @@ const (
 
 	// Батч под этот потолок с запасом на обвязку объекта.
 	boardsBatchBytes = 48000
+
+	// securityCode of the refusals we act on. The board answers a refused
+	// modify-objects with {"error":{"code":200,"securityCode":...}}.
+	boardsRateLimited      = "RATE_LIMITED"
+	boardsNetworkTransport = "NETWORK_TRANSPORT"
+
+	// boardsRate* pace the writes. The board refuses modify-objects with
+	// RATE_LIMITED when objects arrive too fast, and the exact budget is not
+	// documented (2026-11-08: tens of objects per second were refused while
+	// ~641 KB/s of payload still went through), so it is learned with AIMD
+	// rather than guessed: start at boardsRateStart, add boardsRateGrow per
+	// acknowledged object up to boardsRateMax, halve on RATE_LIMITED and keep
+	// the next slot back for boardsRateHold. The floor is low on purpose: at
+	// the floor a 48 KiB object still moves ~96 KB/s, degraded but alive.
+	boardsRateStart = 5.0
+	boardsRateMin   = 2.0
+	boardsRateMax   = 18.0
+	boardsRateGrow  = 0.5
+	boardsRateCut   = 0.5
+	boardsRateHold  = 250 * time.Millisecond
+	// boardsRateHoldMax is where the hold stops doubling: at the floor the rate
+	// cannot fall further, so a board whose budget is below the floor is met with
+	// one object a second instead of a refusal storm. The stall count resets on
+	// the first acknowledged object, so a refusal after a good object is held
+	// back by boardsRateHold again and recovery is not slowed down.
+	boardsRateHoldMax = time.Second
+
+	// boardsMaxTries bounds a retry: a refusal that never clears must not pin
+	// one object in the writer forever.
+	boardsMaxTries = 16
+
+	// boardsAckTimeout forgets an object whose ack never came. A healthy ack
+	// arrives in 0.07-0.17 s; 15 s of silence means the board dropped the event
+	// or the ack was lost, and holding it would leak 48 KiB per object.
+	boardsAckTimeout = 15 * time.Second
+
+	// boardsMaxPending bounds the objects in flight. The count is bounded and so
+	// is the payload: 200 writes of 48 KiB would be ~9 MiB, and the same code
+	// runs inside the phone, so the byte cap is what actually binds.
+	boardsMaxPending      = 200
+	boardsMaxPendingBytes = 2 << 20
+
+	// Deletions are coalesced: one drop-objects per window carrying every object
+	// that arrived in it. The old path spent one event per received object from
+	// the same per-second budget as the payload.
+	boardsDropWindow = 300 * time.Millisecond
+	// boardsDropEventBytes caps the marshalled size of one drop-objects event.
+	// The board's measured ceiling is 48 KiB of decoded value per object, and a
+	// drop echoes the value it received, so one full-size object already fills
+	// ~65 KB of JSON; the budget holds one of those plus smaller neighbours and
+	// never two full ones. Measured on the real JSON (see takeDrops), not on an
+	// estimate: escaping and the envelope are part of the cost.
+	boardsDropEventBytes  = 70 * 1024
+	boardsDropMaxObjects = 64
+
+	// boardsStatsEvery is the cadence of the one write-stats line.
+	boardsStatsEvery = 10 * time.Second
 )
+
+// boardsPacer paces writes as objects per second and learns the board's budget
+// with AIMD. It is a slot clock, not a delay: reserve() says how long the caller
+// has to wait for the next slot, so a busy writer waits for the remainder of the
+// interval instead of sleeping a fixed amount per packet.
+type boardsPacer struct {
+	mu   sync.Mutex
+	rate float64
+	next time.Time
+	// stalls counts refusals since the last acknowledged object: at the floor the
+	// rate cannot fall any further, so the hold itself backs off.
+	stalls int
+	// now is time.Now, and a fake in tests.
+	now func() time.Time
+}
+
+func (p *boardsPacer) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
+}
+
+// currentRate reports the pace in objects per second.
+func (p *boardsPacer) currentRate() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.rate <= 0 {
+		return boardsRateStart
+	}
+	return p.rate
+}
+
+// reserve claims the next write slot and returns how long the caller has to
+// wait before writing.
+func (p *boardsPacer) reserve() time.Duration {
+	now := p.clock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.rate <= 0 {
+		p.rate = boardsRateStart
+	}
+	if p.next.Before(now) {
+		p.next = now
+	}
+	at := p.next
+	p.next = at.Add(p.intervalLocked())
+	return at.Sub(now)
+}
+
+func (p *boardsPacer) intervalLocked() time.Duration {
+	rate := p.rate
+	if rate <= 0 {
+		rate = boardsRateStart
+	}
+	d := time.Duration(float64(time.Second) / rate)
+	if d < time.Millisecond {
+		d = time.Millisecond
+	}
+	return d
+}
+
+// onSuccess credits one acknowledged object and returns the new pace.
+func (p *boardsPacer) onSuccess() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.rate <= 0 {
+		p.rate = boardsRateStart
+	}
+	p.stalls = 0
+	if p.rate < boardsRateMax {
+		p.rate = math.Min(boardsRateMax, p.rate+boardsRateGrow)
+	}
+	return p.rate
+}
+
+// onRateLimited halves the pace, holds the next slot back and returns the new
+// pace. Halving is the "multiplicative decrease" of AIMD: the refused object is
+// resent, so an over-long refusal is expensive.
+func (p *boardsPacer) onRateLimited() float64 {
+	now := p.clock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.rate <= 0 {
+		p.rate = boardsRateStart
+	}
+	p.rate = math.Max(boardsRateMin, p.rate*boardsRateCut)
+	p.stalls++
+	shift := p.stalls - 1
+	if shift > 2 {
+		shift = 2 // 250 ms -> 500 ms -> 1 s, the ceiling
+	}
+	hold := boardsRateHold << uint(shift)
+	if hold > boardsRateHoldMax {
+		hold = boardsRateHoldMax
+	}
+	if until := now.Add(hold); p.next.Before(until) {
+		p.next = until
+	}
+	return p.rate
+}
 
 // ---- внутренние типы ----
 
@@ -78,6 +237,227 @@ type boardsSession struct {
 
 	// creatorHash — серверный хэш (из participant-connected/431).
 	creatorHash atomic.Pointer[string]
+
+	// pending holds every write that is on the wire and not acknowledged yet, by
+	// its socket.io ack id. A RATE_LIMITED answer names the event the board
+	// refused and nothing else does, so this map is what turns a refusal into a
+	// retry instead of a lost frame.
+	pending      map[int64]boardsOutgoing
+	pendingBytes int
+	pendMu       sync.Mutex
+
+	// retry holds refused writes in the order the board refused them. The writer
+	// drains it before the fresh queue, so a refusal cannot reorder the stream.
+	retry   []boardsOutgoing
+	retryMu sync.Mutex
+	retryCh chan struct{}
+
+	// dropList coalesces the objects the peer sent into one drop-objects event
+	// per window; each of those events costs the same budget as a payload write.
+	dropList []map[string]interface{}
+	dropMu   sync.Mutex
+	dropCh   chan struct{}
+
+	// stop is closed when this connection's serve loop ends: the writer, dropper
+	// and stats goroutines belong to one socket and must not outlive it.
+	stop chan struct{}
+}
+
+// boardsOutgoing is one unit of work for the writer: either a payload object
+// (modify-objects) or the deletion of objects the peer sent (drop-objects). Both
+// spend the board's per-second event budget, so both are paced and both are
+// retried when the board refuses them. Protocol frames (ping/pong, subscribe,
+// heartbeat) never go through here: a held pong closes the socket.
+type boardsOutgoing struct {
+	pkt []byte
+	// drop is the prebuilt drop-objects event; pkt is empty for a drop.
+	drop map[string]interface{}
+	// tries counts the writes already made for this unit; it bounds a retry
+	// that keeps being refused.
+	tries int
+	// at is when the write left, so a silent ack can be timed out.
+	at time.Time
+}
+
+// pendingSize is what one in-flight write costs against boardsMaxPendingBytes.
+func pendingSize(w boardsOutgoing) int { return len(w.pkt) + dropEventBytes(w.drop) }
+
+// trackPending records a write in flight and returns any writes evicted to stay
+// within the count and byte caps. The payload of one write is up to 48 KiB, so
+// an unacknowledged set has to be bounded by bytes, not only by count: this code
+// also runs inside the phone.
+func (s *boardsSession) trackPending(id int64, out boardsOutgoing) []boardsOutgoing {
+	size := pendingSize(out)
+	s.pendMu.Lock()
+	defer s.pendMu.Unlock()
+	var evicted []boardsOutgoing
+	for len(s.pending) >= boardsMaxPending ||
+		(len(s.pending) > 0 && s.pendingBytes+size > boardsMaxPendingBytes) {
+		oldID, oldest, ok := s.oldestPendingLocked()
+		if !ok {
+			break
+		}
+		delete(s.pending, oldID)
+		s.pendingBytes -= pendingSize(oldest)
+		evicted = append(evicted, oldest)
+	}
+	s.pending[id] = out
+	s.pendingBytes += size
+	return evicted
+}
+
+func (s *boardsSession) oldestPendingLocked() (int64, boardsOutgoing, bool) {
+	var (
+		bestID   int64
+		best     boardsOutgoing
+		bestSeen bool
+	)
+	for id, w := range s.pending {
+		if !bestSeen || w.at.Before(best.at) {
+			bestID, best, bestSeen = id, w, true
+		}
+	}
+	return bestID, best, bestSeen
+}
+
+// takePending removes and returns the write an ack answers.
+func (s *boardsSession) takePending(id int64) (boardsOutgoing, bool) {
+	s.pendMu.Lock()
+	out, ok := s.pending[id]
+	if ok {
+		delete(s.pending, id)
+		s.pendingBytes -= pendingSize(out)
+	}
+	s.pendMu.Unlock()
+	return out, ok
+}
+
+func (s *boardsSession) forgetPending(id int64) {
+	s.pendMu.Lock()
+	if out, ok := s.pending[id]; ok {
+		delete(s.pending, id)
+		s.pendingBytes -= pendingSize(out)
+	}
+	s.pendMu.Unlock()
+}
+
+func (s *boardsSession) pendingCount() int {
+	s.pendMu.Lock()
+	defer s.pendMu.Unlock()
+	return len(s.pending)
+}
+
+func (s *boardsSession) pendingByteCount() int {
+	s.pendMu.Lock()
+	defer s.pendMu.Unlock()
+	return s.pendingBytes
+}
+
+// expiredPending forgets the writes the board never answered: the event was
+// dropped silently or its ack was lost, and neither may hold memory forever.
+func (s *boardsSession) expiredPending(now time.Time, age time.Duration) []boardsOutgoing {
+	s.pendMu.Lock()
+	defer s.pendMu.Unlock()
+	var out []boardsOutgoing
+	for id, w := range s.pending {
+		if now.Sub(w.at) <= age {
+			continue
+		}
+		out = append(out, w)
+		delete(s.pending, id)
+		s.pendingBytes -= pendingSize(w)
+	}
+	return out
+}
+
+// retryObject puts a refused write back in the writer's queue.
+func (s *boardsSession) retryObject(out boardsOutgoing) {
+	out.tries++
+	s.retryMu.Lock()
+	s.retry = append(s.retry, out)
+	s.retryMu.Unlock()
+	select {
+	case s.retryCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *boardsSession) takeRetry() (boardsOutgoing, bool) {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	if len(s.retry) == 0 {
+		return boardsOutgoing{}, false
+	}
+	out := s.retry[0]
+	s.retry = s.retry[1:]
+	if len(s.retry) == 0 {
+		s.retry = nil
+	}
+	return out, true
+}
+
+// queueDrops hands the peer's objects to the coalescer: one drop-objects per
+// window answers many server-modify-objects events.
+func (s *boardsSession) queueDrops(objects []map[string]interface{}) {
+	if len(objects) == 0 {
+		return
+	}
+	s.dropMu.Lock()
+	s.dropList = append(s.dropList, objects...)
+	s.dropMu.Unlock()
+	select {
+	case s.dropCh <- struct{}{}:
+	default:
+	}
+}
+
+// takeDrops builds one drop-objects event from the queued objects: as many as
+// stay under boardsDropEventBytes once the event is marshalled, oldest first.
+// The board's measured ceiling is 48 KiB of decoded value per object, and a drop
+// echoes the value it received, so the budget is sized to hold one full-size
+// object plus its smaller neighbours - not two full ones. The size is checked on
+// the real JSON, not estimated: escaping and the envelope are part of the cost.
+func (s *boardsSession) takeDrops(participant string) (map[string]interface{}, bool) {
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	var event map[string]interface{}
+	n := 0
+	for n < len(s.dropList) && n < boardsDropMaxObjects {
+		cand := buildDropObjects(s.dropList[:n+1], participant)
+		body, err := json.Marshal(cand)
+		if err != nil || (n > 0 && len(body) > boardsDropEventBytes) {
+			break
+		}
+		event = cand
+		n++
+	}
+	if n == 0 {
+		return nil, false
+	}
+	s.dropList = s.dropList[n:]
+	if len(s.dropList) == 0 {
+		s.dropList = nil
+	}
+	return event, true
+}
+
+func (s *boardsSession) dropsPending() int {
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	return len(s.dropList)
+}
+
+// dropEventBytes is what a prebuilt drop event costs against the pending byte
+// cap; a payload write costs len(pkt).
+func dropEventBytes(event map[string]interface{}) int {
+	if event == nil {
+		return 0
+	}
+	body, err := json.Marshal(event)
+	if err != nil {
+		return 0
+	}
+	return len(body)
 }
 
 func (s *boardsSession) safeWrite(msgType int, data []byte) error {
@@ -93,14 +473,26 @@ func shortStr(s string, n int) string {
 	return s[:n]
 }
 
-func (s *boardsSession) writeEventObj(ns string, obj interface{}) error {
-	ack := s.ack.Add(1) - 1
+// nextAck reserves the socket.io ack id of one event. Every event we send
+// carries one and the board answers each with "43<id>[...]", which is the only
+// place a refusal shows up - so the id is what ties a refused object back to the
+// payload that has to be written again.
+func (s *boardsSession) nextAck() int64 { return s.ack.Add(1) - 1 }
+
+// writeEventWithAck writes one dashboard event under a pre-reserved ack id: the
+// caller records the object as in flight before this call, or a fast refusal can
+// arrive for an id nobody knows.
+func (s *boardsSession) writeEventWithAck(ack int64, ns string, obj interface{}) error {
 	payload, err := json.Marshal([]interface{}{ns, obj})
 	if err != nil {
 		return err
 	}
 	msg := fmt.Sprintf("42%d%s", ack, payload)
 	return s.safeWrite(websocket.TextMessage, []byte(msg))
+}
+
+func (s *boardsSession) writeEventObj(ns string, obj interface{}) error {
+	return s.writeEventWithAck(s.nextAck(), ns, obj)
 }
 
 func (s *boardsSession) writeRaw(raw string) error {
@@ -135,6 +527,31 @@ type BoardsTransport struct {
 	// warnNetworkTransport keeps the "the board refuses visible IP traffic"
 	// advice to one line: every refused write repeats the same ack.
 	warnNetworkTransport atomic.Bool
+
+	// pacer is the write budget learned for this board. It lives on the
+	// transport, not on the session, so a reconnect keeps what was learned
+	// instead of climbing back to the ceiling from scratch.
+	pacer boardsPacer
+
+	// rateLog keeps the rate lines to one per change. One line per ack is what
+	// this replaces: dozens of RATE_LIMITED acks a second used to print a line
+	// each and bury everything else.
+	rateLogMu   sync.Mutex
+	rateLogged  int
+	rateCeiling bool
+
+	// Write counters for the periodic stats line. Refusals stay split on
+	// purpose: PAYLOAD_TOO_LARGE is our own frame-size bug, NETWORK_TRANSPORT is
+	// a key mismatch between the peers, and one merged counter would hide which
+	// of the two is happening.
+	statSent        atomic.Int64 // payload writes the board acknowledged
+	statDropEvents  atomic.Int64 // drop-objects events sent
+	statRetried     atomic.Int64 // refused writes put back in the queue
+	statRefused     atomic.Int64 // RATE_LIMITED acks
+	statTooLarge    atomic.Int64 // PAYLOAD_TOO_LARGE acks
+	statKeyMismatch atomic.Int64 // NETWORK_TRANSPORT acks
+	statDroppedDead atomic.Int64 // writes given up on (retry cap or silent ack)
+	statOverload    atomic.Int64 // in-flight writes evicted by the memory cap
 }
 
 func NewBoardsTransport(rawURL string, config transport.TransportConfig) *BoardsTransport {
@@ -162,10 +579,13 @@ func (t *BoardsTransport) SetErrorNotifier(fn func(err error, transportName, url
 // the cap and lose the whole batch to PAYLOAD_TOO_LARGE.
 func (t *BoardsTransport) PreferredBatchBytes() int { return boardsBatchBytes }
 
-// PreferredBatchLingerMs widens the coalescing window a little: one board
-// message costs a round trip (measured 0.07-0.17 s on the board's own shard),
-// so a longer window turns browsing traffic into fewer, fuller objects.
-func (t *BoardsTransport) PreferredBatchLingerMs() int { return 20 }
+// PreferredBatchLingerMs widens the coalescing window: one board message costs
+// a round trip (measured 0.07-0.17 s on the board's own shard) and, more
+// importantly, a slot in the board's per-second budget. At 20 ms a browsing
+// tunnel wrote ~50 objects a second, each one a chance to be answered
+// RATE_LIMITED; 100 ms turns the same bytes into fewer, fuller objects. The byte
+// ceiling (boardsBatchBytes) is unchanged: it is the board's own limit.
+func (t *BoardsTransport) PreferredBatchLingerMs() int { return 100 }
 
 func (t *BoardsTransport) Start() error {
 	if err := t.BaseTransport.Start(); err != nil {
@@ -635,13 +1055,38 @@ func mergeBoardState(dst, src map[string]string) {
 	}
 }
 
-// ackSecurityCode returns the securityCode of an event ack that carries an
-// error, or "" for a plain ack. The board answers e.g.
-// `433[{"error":{"code":200,"securityCode":"NETWORK_TRANSPORT"}}]`.
-func ackSecurityCode(raw []byte) string {
-	idx := bytes.IndexByte(raw, '[')
+// boardsAck is what an event ack says: which event it answers, and whether the
+// board refused that event.
+type boardsAck struct {
+	ID       int64
+	Known    bool // a "43<id>[...]" packet: an ack we can match to a write
+	Error    bool
+	Code     int
+	Security string
+}
+
+// parseBoardsAck reads a socket.io ack packet. "43" with no id is not an ack -
+// the board also answers with a bare "43[...]" - and an id whose body does not
+// parse leaves Error false, i.e. an accepted event.
+func parseBoardsAck(raw []byte) boardsAck {
+	var a boardsAck
+	if !bytes.HasPrefix(raw, []byte("43")) {
+		return a
+	}
+	i := 2
+	for ; i < len(raw) && raw[i] >= '0' && raw[i] <= '9'; i++ {
+		if i-2 > 17 {
+			return boardsAck{} // not an id we could have assigned
+		}
+		a.ID = a.ID*10 + int64(raw[i]-'0')
+	}
+	if i == 2 {
+		return boardsAck{}
+	}
+	a.Known = true
+	idx := bytes.IndexByte(raw[i:], '[')
 	if idx < 0 {
-		return ""
+		return a
 	}
 	var arr []struct {
 		Error *struct {
@@ -649,10 +1094,101 @@ func ackSecurityCode(raw []byte) string {
 			SecurityCode string `json:"securityCode"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw[idx:], &arr); err != nil || len(arr) == 0 || arr[0].Error == nil {
-		return ""
+	if err := json.Unmarshal(raw[i+idx:], &arr); err != nil || len(arr) == 0 {
+		return a
 	}
-	return arr[0].Error.SecurityCode
+	if e := arr[0].Error; e != nil {
+		a.Error = true
+		a.Code = e.Code
+		a.Security = e.SecurityCode
+	}
+	return a
+}
+
+// ackSecurityCode returns the securityCode of an event ack that carries an
+// error, or "" for a plain ack. The board answers e.g.
+// `433[{"error":{"code":200,"securityCode":"NETWORK_TRANSPORT"}}]`.
+func ackSecurityCode(raw []byte) string {
+	return parseBoardsAck(raw).Security
+}
+
+// handleAck reads the board's answer to one of our events. Every write goes out
+// with an ack id, so a refusal only ever arrives here: before this it was one
+// debug line and the payload it named was thrown away.
+func (t *BoardsTransport) handleAck(sess *boardsSession, raw []byte) {
+	ack := parseBoardsAck(raw)
+	if !ack.Known {
+		return
+	}
+	out, tracked := sess.takePending(ack.ID)
+	if !tracked {
+		// Heartbeats, subscribe and the keepalive share the id space; only paced
+		// writes are tracked, and an unknown code is still worth one line.
+		if ack.Error && ack.Security != "" && ack.Security != boardsRateLimited &&
+			utils.Throttled("boards.ack.untracked", 30*time.Second) {
+			utils.Debugf("[BOARDS] event ack error: %s", shortStr(string(raw), 240))
+		}
+		return
+	}
+
+	if !ack.Error {
+		if out.drop != nil {
+			t.statDropEvents.Add(1)
+		} else {
+			t.statSent.Add(1)
+		}
+		t.noteRate(t.pacer.onSuccess(), "")
+		return
+	}
+
+	if ack.Security == boardsRateLimited {
+		// The board names the object it refused: the write goes back to the
+		// front of the writer and the pace halves, so the next second asks for
+		// less than the board just refused.
+		t.statRefused.Add(1)
+		t.noteRate(t.pacer.onRateLimited(), "rate limited")
+		if out.tries >= boardsMaxTries {
+			t.deadWrite(out, ack.Security)
+			return
+		}
+		t.statRetried.Add(1)
+		sess.retryObject(out)
+		return
+	}
+
+	// NETWORK_TRANSPORT, PAYLOAD_TOO_LARGE and the rest name the bytes, not the
+	// timing: the same object meets the same answer, so a retry only burns the
+	// budget.
+	if ack.Security == boardsNetworkTransport && t.warnNetworkTransport.CompareAndSwap(false, true) {
+		// The board decodes the object value and refuses anything that carries
+		// visible IPv4/TCP traffic (measured 2026-11-08: a real SYN inside the
+		// batch is refused, the same frame with a zero-filled packet passes).
+		// Sealed frames look random, so this is what a peer without
+		// -encryption-key hits before anything reaches the other side.
+		utils.Infof("[BOARDS] the board refuses frames carrying visible IP traffic; both peers must run with the same -encryption-key")
+	}
+	t.deadWrite(out, ack.Security)
+}
+
+// deadWrite accounts a write that will not be retried. The refusal counters stay
+// split on purpose: PAYLOAD_TOO_LARGE means the frame we built was too big and
+// NETWORK_TRANSPORT means the peers' keys disagree - one merged counter would
+// make the two indistinguishable in the log a day later.
+func (t *BoardsTransport) deadWrite(out boardsOutgoing, code string) {
+	switch code {
+	case "PAYLOAD_TOO_LARGE":
+		t.statTooLarge.Add(1)
+	case boardsNetworkTransport:
+		t.statKeyMismatch.Add(1)
+	}
+	t.statDroppedDead.Add(1)
+	if out.drop != nil {
+		// An undeleted object is clutter on the board; no user payload is lost.
+		return
+	}
+	if utils.Throttled("boards.deadwrite", 30*time.Second) {
+		utils.Infof("[BOARDS] write gave up after %d tries (%q), counted as dropped_dead", out.tries, code)
+	}
 }
 
 func (t *BoardsTransport) connectAndServe(info boardsInfo) error {
@@ -716,9 +1252,13 @@ func (t *BoardsTransport) connectAndServe(info boardsInfo) error {
 	participant := info.userHash
 	creator := info.userHash
 	sess := &boardsSession{
-		Info:  info,
-		Conn:  conn,
-		Queue: make(chan []byte, t.GetConfig().MaxQueueSize),
+		Info:    info,
+		Conn:    conn,
+		Queue:   make(chan []byte, t.GetConfig().MaxQueueSize),
+		pending: make(map[int64]boardsOutgoing),
+		retryCh: make(chan struct{}, 1),
+		dropCh:  make(chan struct{}, 1),
+		stop:    make(chan struct{}),
 	}
 	sess.participant.Store(&participant)
 	sess.creatorHash.Store(&creator)
@@ -727,13 +1267,22 @@ func (t *BoardsTransport) connectAndServe(info boardsInfo) error {
 	if err := t.handshake(sess); err != nil {
 		conn.Close()
 		t.session.Store(nil)
+		close(sess.stop)
 		return fmt.Errorf("handshake: %w", err)
 	}
 
 	_ = conn.SetReadDeadline(time.Time{})
 
+	// The writer, the drop coalescer and the stats line belong to this socket:
+	// when it dies they stop, or the next session would share the budget with a
+	// writer whose connection is already gone.
+	defer close(sess.stop)
+
 	t.SetConnected(true)
+	utils.Debugf("[BOARDS] write pace %.1f objects/s", t.pacer.currentRate())
 	utils.SafeGo("boards.writer", func() { t.writerLoop(sess) })
+	utils.SafeGo("boards.dropper", func() { t.dropLoop(sess) })
+	utils.SafeGo("boards.stats", func() { t.statsLoop(sess) })
 
 	// No client-side engine.io ping: in EIO=4 the server pings ("2") and the
 	// client answers ("3", see handleMessage). A client "2" is an invalid
@@ -898,31 +1447,144 @@ func (t *BoardsTransport) sendSubscribe(sess *boardsSession, participant string)
 // Канал — modify-objects. Создаём текстовый объект с payload в value.
 // Сервер broadcast'ит как server-modify-objects, который обрабатывается
 // в handleServerModifyObjects.
+//
+// Every write is paced, recorded in flight and answered by the board with an
+// ack carrying its id. A RATE_LIMITED ack puts the object back in the writer, so
+// a refusal costs time and never the payload. Protocol frames are NOT paced:
+// ping/pong and subscribe go out through writeRaw/writeEventObj directly,
+// because a pong held behind the budget is a socket the board closes.
 
 func (t *BoardsTransport) writerLoop(sess *boardsSession) {
-	queue := sess.Queue
 	for {
+		if out, ok := sess.takeRetry(); ok {
+			t.writeObject(sess, out)
+			continue
+		}
 		select {
 		case <-t.done:
 			return
-		case pkt := <-queue:
-			if err := t.sendNotifyPosition(sess, pkt); err != nil {
-				utils.Debugf("[BOARDS] notify-position: %v", err)
-			} else {
-				t.RecordSend(len(pkt))
-			}
+		case <-sess.stop:
+			return
+		case <-sess.retryCh:
+			// A refusal queued a retry while the fresh queue was empty.
+		case pkt := <-sess.Queue:
+			t.writeObject(sess, boardsOutgoing{pkt: pkt})
 		}
 	}
 }
 
-// sendNotifyPosition отправляет modify-objects с текстовым объектом.
-// Payload передаём в _attributes_.value как base64. Сервер broadcast'ит
-// это как server-modify-objects, который peer'ы обрабатывают.
-func (t *BoardsTransport) sendNotifyPosition(sess *boardsSession, pkt []byte) error {
-	// Уникальный ID объекта и случайные координаты.
-	obj := buildModifyObjects(base64.StdEncoding.EncodeToString(pkt), randomHex(32),
-		mrand.Intn(2000), mrand.Intn(1200), *sess.creatorHash.Load(), *sess.participant.Load())
-	return sess.writeEventObj("dashboard", obj)
+// writeObject waits for its slot in the board's write budget and writes one
+// object. The pace is a slot clock (boardsPacer), not a sleep per packet: while
+// the queue is busy the wait is whatever is left of the interval.
+func (t *BoardsTransport) writeObject(sess *boardsSession, out boardsOutgoing) {
+	if !t.waitSlot() {
+		return
+	}
+	if err := t.sendObject(sess, out); err != nil {
+		utils.Debugf("[BOARDS] notify-position: %v", err)
+		return
+	}
+	// A retry re-sends bytes the tunnel already counted once.
+	if out.drop == nil && out.tries == 0 {
+		t.RecordSend(len(out.pkt))
+	}
+}
+
+// waitSlot blocks until the next place in the board's write budget is ours.
+// False means the transport is closing.
+func (t *BoardsTransport) waitSlot() bool {
+	d := t.pacer.reserve()
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-t.done:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// sendObject writes one unit of work and records it in flight under its ack id.
+// The payload object itself is built exactly as before (buildModifyObjects), so
+// nothing changes on the wire apart from the pace.
+func (t *BoardsTransport) sendObject(sess *boardsSession, out boardsOutgoing) error {
+	var event map[string]interface{}
+	if out.drop != nil {
+		event = out.drop
+	} else {
+		// Уникальный ID объекта и случайные координаты.
+		event = buildModifyObjects(base64.StdEncoding.EncodeToString(out.pkt), randomHex(32),
+			mrand.Intn(2000), mrand.Intn(1200), *sess.creatorHash.Load(), *sess.participant.Load())
+	}
+	out.at = time.Now()
+	id := sess.nextAck()
+	if evicted := sess.trackPending(id, out); len(evicted) > 0 {
+		// The board is not acknowledging: the oldest writes lost their slot to
+		// keep the phone out of OOM. Counted, not silent.
+		t.statOverload.Add(int64(len(evicted)))
+		if utils.Throttled("boards.overload", 30*time.Second) {
+			utils.Infof("[BOARDS] %d writes evicted unacknowledged (in-flight cap %d writes / %d KiB)",
+				len(evicted), boardsMaxPending, boardsMaxPendingBytes/1024)
+		}
+	}
+	if err := sess.writeEventWithAck(id, "dashboard", event); err != nil {
+		sess.forgetPending(id)
+		return err
+	}
+	return nil
+}
+
+// buildDropObjects is the drop-objects event that deletes the objects the peer
+// sent. It is built once per coalesced batch (see takeDrops) because its size is
+// what decides how many objects fit.
+func buildDropObjects(objects []map[string]interface{}, participant string) map[string]interface{} {
+	return map[string]interface{}{
+		"action": "drop-objects",
+		"data": map[string]interface{}{
+			"objects": objects,
+		},
+		"participant": participant,
+	}
+}
+
+// dropLoop turns a burst of received objects into one drop-objects event per
+// window. Each server-modify-objects used to spawn its own goroutine with a
+// 100 ms sleep, so every received object cost its own event from the same
+// per-second budget as the payload that carries user traffic.
+func (t *BoardsTransport) dropLoop(sess *boardsSession) {
+	for {
+		select {
+		case <-t.done:
+			return
+		case <-sess.stop:
+			return
+		case <-sess.dropCh:
+		}
+		// Wait the window out so a burst becomes one event.
+		select {
+		case <-t.done:
+			return
+		case <-sess.stop:
+			return
+		case <-time.After(boardsDropWindow):
+		}
+		for {
+			event, ok := sess.takeDrops(*sess.participant.Load())
+			if !ok {
+				break
+			}
+			if !t.waitSlot() {
+				return
+			}
+			if err := t.sendObject(sess, boardsOutgoing{drop: event}); err != nil {
+				utils.Debugf("[BOARDS] drop-objects: %v", err)
+				return
+			}
+		}
+	}
 }
 
 // buildModifyObjects is the modify-objects event carrying one packet as a
@@ -974,25 +1636,6 @@ func BoardsModifyObjects(b64, objID string, x, y int, creator, participant strin
 	return body
 }
 
-// dropObjects отправляет drop-objects для удаления объектов с доски.
-func (t *BoardsTransport) dropObjects(sess *boardsSession, objects []map[string]interface{}) {
-	if len(objects) == 0 {
-		return
-	}
-	obj := map[string]interface{}{
-		"action": "drop-objects",
-		"data": map[string]interface{}{
-			"objects": objects,
-		},
-		"participant": *sess.participant.Load(),
-	}
-	if err := sess.writeEventObj("dashboard", obj); err != nil {
-		utils.Debugf("[BOARDS] drop-objects: %v", err)
-	} else {
-		utils.Debugf("[BOARDS] dropped %d objects", len(objects))
-	}
-}
-
 // ---- keepalive ----
 
 func (t *BoardsTransport) keepAliveLoop(sess *boardsSession, stop chan struct{}) {
@@ -1018,6 +1661,75 @@ func (t *BoardsTransport) keepAliveLoop(sess *boardsSession, stop chan struct{})
 	}
 }
 
+// noteRate reports a change of the write pace once. A refusal names the new
+// rate; a climb is named only when it reaches the ceiling again. Anything more
+// talkative would reproduce the log storm this replaces - dozens of
+// RATE_LIMITED acks a second, one debug line each.
+func (t *BoardsTransport) noteRate(rate float64, reason string) {
+	t.rateLogMu.Lock()
+	defer t.rateLogMu.Unlock()
+	n := int(rate)
+	if reason != "" {
+		if n == t.rateLogged {
+			return
+		}
+		t.rateLogged = n
+		t.rateCeiling = false
+		utils.Infof("[BOARDS] write rate -> %d/s (%s)", n, reason)
+		return
+	}
+	if rate < boardsRateMax || t.rateCeiling {
+		return
+	}
+	t.rateCeiling = true
+	t.rateLogged = n
+	utils.Infof("[BOARDS] write rate -> %d/s (recovered)", n)
+}
+
+// statsLoop prints one line per interval with the write counters: a rate limit
+// shows up as refused/retried next to the pace, so no line per ack is needed.
+func (t *BoardsTransport) statsLoop(sess *boardsSession) {
+	tick := time.NewTicker(boardsStatsEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-t.done:
+			return
+		case <-sess.stop:
+			return
+		case <-tick.C:
+		}
+		t.requeueExpired(sess)
+		utils.Debugf("[BOARDS] write rate=%.1f/s sent=%d retried=%d refused=%d too_large=%d key_mismatch=%d dropped_dead=%d overload=%d drops=%d queue=%d pending=%d/%dKiB",
+			t.pacer.currentRate(), t.statSent.Load(), t.statRetried.Load(), t.statRefused.Load(),
+			t.statTooLarge.Load(), t.statKeyMismatch.Load(), t.statDroppedDead.Load(),
+			t.statOverload.Load(), t.statDropEvents.Load(), len(sess.Queue),
+			sess.pendingCount(), sess.pendingByteCount()/1024)
+	}
+}
+
+// requeueExpired retries a write whose ack never came. The board either dropped
+// the event silently or the ack was lost; keeping it would leak up to 48 KiB per
+// object, and resending is the same bet the tunnel makes on any lost frame.
+func (t *BoardsTransport) requeueExpired(sess *boardsSession) {
+	for _, out := range sess.expiredPending(time.Now(), boardsAckTimeout) {
+		if out.drop != nil {
+			// A drop nobody acknowledged is not resent: it costs a full-size event
+			// and an object left on the board is clutter, not lost payload.
+			continue
+		}
+		if out.tries >= boardsMaxTries {
+			t.statDroppedDead.Add(1)
+			if utils.Throttled("boards.deadwrite", 30*time.Second) {
+				utils.Infof("[BOARDS] write gave up after %d tries (no ack), counted as dropped_dead", out.tries)
+			}
+			continue
+		}
+		t.statRetried.Add(1)
+		sess.retryObject(out)
+	}
+}
+
 // ---- приём ----
 
 func (t *BoardsTransport) handleMessage(sess *boardsSession, raw []byte) {
@@ -1031,21 +1743,11 @@ func (t *BoardsTransport) handleMessage(sess *boardsSession, raw []byte) {
 	}
 
 	if bytes.HasPrefix(raw, []byte("43")) {
+		// handle431 runs for every "43..." packet, with or without an id: the
+		// board's snapshot there is the only source of creatorHash and
+		// dashboard_link, and the handshake waits for it.
 		t.handle431(sess, raw)
-		if code := ackSecurityCode(raw); code != "" {
-			// Every event goes out with an ack id, so a refusal arrives here
-			// instead of the log; without this a rejected write is silent.
-			utils.Debugf("[BOARDS] event ack error: %s", shortStr(string(raw), 240))
-			if code == "NETWORK_TRANSPORT" && t.warnNetworkTransport.CompareAndSwap(false, true) {
-				// The board decodes the object value and refuses anything that
-				// carries visible IPv4/TCP traffic (measured 2026-11-08: a real
-				// SYN inside the batch is refused, the same frame with a
-				// zero-filled packet passes). Sealed frames look random, so this
-				// is what a peer without -encryption-key hits before anything
-				// reaches the other side.
-				utils.Infof("[BOARDS] the board refuses frames carrying visible IP traffic; both peers must run with the same -encryption-key")
-			}
-		}
+		t.handleAck(sess, raw)
 		return
 	}
 	if !bytes.HasPrefix(raw, []byte("42[")) {
@@ -1119,13 +1821,11 @@ func (t *BoardsTransport) handleServerModifyObjects(sess *boardsSession, raw jso
 		}
 	}
 
-	// Удаляем принятые объекты
-	if len(toDelete) > 0 {
-		utils.SafeGo("boards.cleanup", func() {
-			time.Sleep(100 * time.Millisecond) // Небольшая задержка перед удалением
-			t.dropObjects(sess, toDelete)
-		})
-	}
+	// Удаляем принятые объекты. The coalescer answers a whole burst with one
+	// drop-objects event: the old path spawned a goroutine with a 100 ms sleep
+	// per received object, and each of those events cost a slot in the same
+	// per-second budget as the payload.
+	sess.queueDrops(toDelete)
 }
 
 // ModifyObjectsPayloads reads a (server-)modify-objects event: the packets
