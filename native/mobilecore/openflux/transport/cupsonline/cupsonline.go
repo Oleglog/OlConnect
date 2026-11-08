@@ -113,8 +113,13 @@ type CupsonlineConfig struct {
 	// refused write never arrives - the peer sees silence and the stripe
 	// retransmits what it already sent. Instead of a guessed interval each
 	// channel finds its budget: grow on every clean second, cut and hold on a
-	// refusal, recover slowly. The interval also respects a byte rate, so a big
-	// message cannot be written faster than the relay swallows it.
+	// refusal, recover slowly - and never climb back to the rate that was just
+	// refused until the ceiling is probed again, so the rate settles instead of
+	// sawing 100 -> 23 -> 100 -> 23. RateHold must stay well under one RTO:
+	// a longer pause looks like a lost packet to the stripe layer and buys
+	// retransmissions of everything in flight. The interval also respects a
+	// byte rate, so a big message cannot be written faster than the relay
+	// swallows it.
 	RateStart float64
 	RateMin   float64
 	RateMax   float64
@@ -201,7 +206,10 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		RateMax:   cupsEnvFloat("OPENFLUX_CUPS_RATE_MAX", 200),
 		RateGrow:  cupsEnvFloat("OPENFLUX_CUPS_RATE_GROW", 1.05),
 		RateCut:   cupsEnvFloat("OPENFLUX_CUPS_RATE_CUT", 0.5),
-		RateHold:  time.Duration(cupsEnvInt("OPENFLUX_CUPS_RATE_HOLD_MS", 2000)) * time.Millisecond,
+		// 400 ms, not 2 s: the stripe layer's RTO is 2 s, so a hold that long
+		// holds back the acks too and every piece in flight is retransmitted
+		// into a relay that is still refusing - the storm in the stand's log.
+		RateHold:  time.Duration(cupsEnvInt("OPENFLUX_CUPS_RATE_HOLD_MS", 400)) * time.Millisecond,
 		RateBytes: cupsEnvInt("OPENFLUX_CUPS_RATE_BYTES", 32768),
 
 		StatsInterval: 5 * time.Second,
@@ -657,6 +665,10 @@ type cupsWS struct {
 	rateLogAt   time.Time
 	rateCutFrom float64
 	rateSuspect bool
+	// rateCeil is the rate a refusal proved to be too high: growth stops there
+	// until the probe at rateProbeAt moves it up again.
+	rateCeil    float64
+	rateProbeAt time.Time
 	// ratePub mirrors rate for the stats goroutine (math.Float64bits).
 	ratePub atomic.Uint64
 
@@ -677,13 +689,23 @@ type cupsWS struct {
 	ctx       context.Context
 	connected atomic.Bool
 
-	// recvBufs reassemble each peer's byte stream across messages (one packet
-	// may be split over several), one buffer per room member: when two members
-	// send at once - two generations of a PHP exit handing over - a packet cut
-	// across messages must not take the other member's bytes into its middle.
-	// Touched only by the read goroutine, and reset on every reconnect - a
+	// recvStreams reassemble each peer's byte stream across messages (one
+	// packet may be split over several), one stream per room member: when two
+	// members send at once - two generations of a PHP exit handing over - a
+	// packet cut across messages must not take the other member's bytes into
+	// its middle. Each stream carries the sender's sequence number, so a
+	// message that never arrived is a hole and not a shift of everything after
+	// it. Touched only by the read goroutine, and reset on every reconnect - a
 	// packet split across a drop is lost, like on any link.
-	recvBufs map[string][]byte
+	recvStreams map[string]*cupsStream
+	// legacyWarned is set once when the peer turns out to run a build that
+	// still sends bare stream slices; the read goroutine owns it.
+	legacyWarned bool
+
+	// txSeq numbers our messages on this channel, so the far side can tell a
+	// lost message (the relay refused it) from an ordered one. Atomic because
+	// the connect path resets it while sendLoop counts it.
+	txSeq atomic.Uint32
 
 	sendQueue chan []byte
 
@@ -903,7 +925,8 @@ func (w *cupsWS) room() string {
 func (w *cupsWS) adopt(a *cupsAuth) {
 	w.session = a.httpClient
 	w.authPtr.Store(a)
-	w.recvBufs = nil
+	w.recvStreams = nil
+	w.txSeq.Store(0)
 	w.joinedAt = time.Now()
 	w.markAlive()
 }
@@ -970,7 +993,8 @@ func (w *cupsWS) connectAndServe() error {
 
 	conn.SetReadLimit(int64(w.config.MaxMessageBytes))
 	// Fresh socket, fresh stream: drop any half-assembled packet from before.
-	w.recvBufs = nil
+	w.recvStreams = nil
+	w.txSeq.Store(0)
 
 	if err := w.writeJSON(map[string]interface{}{
 		"id": 1, "connect": map[string]interface{}{"token": a.connToken, "name": "js"},
@@ -1077,27 +1101,39 @@ func (w *cupsWS) sendLoop() {
 	}
 }
 
+// cupsFrameMagic opens every message. Before it a message carried a bare slice
+// of one byte stream and the peer stitched the slices back together in order, so
+// a single refused write - the relay answers 429 and the message never arrives -
+// put the stream permanently out of step: the packets in the hole were lost and
+// everything parsed out of the shifted bytes after it was garbage. That is the
+// stand's "traffic dies after half a minute and never comes back". Each message
+// now names itself, so a lost one is a hole the stripe layer retransmits instead
+// of a cliff.
+var cupsFrameMagic = [2]byte{'O', 'F'}
+
+const (
+	// cupsFrameHeader is magic(2) + sequence(4) + flags(1) + body length(2).
+	cupsFrameHeader = 9
+	// cupsFrameCont marks a message that starts inside a packet: only one
+	// bigger than a whole message is ever cut, and the far side parses nothing
+	// until the cut ends.
+	cupsFrameCont = 1 << 0
+)
+
+// cupsHoldMax caps the AIMD hold: it is there to let the relay's budget refill,
+// not to stall acks for longer than one stripe RTO.
+const cupsHoldMax = 500 * time.Millisecond
+
 func (w *cupsWS) sendBatch(batch [][]byte) error {
-	var buf bytes.Buffer
-	var hdr [2]byte
 	totalRaw := 0
 	for _, p := range batch {
-		binary.BigEndian.PutUint16(hdr[:], uint16(len(p)))
-		buf.Write(hdr[:])
-		buf.Write(p)
 		totalRaw += len(p)
 	}
-	blob := buf.Bytes()
-
-	// One message can only carry so much before the server drops it, so a
-	// batch is cut into chunks and each goes as its own message. The far side
-	// stitches them back together in order.
-	for off := 0; off < len(blob); off += w.config.MaxMessageData {
-		end := min(off+w.config.MaxMessageData, len(blob))
-		if err := w.pace(end - off); err != nil {
+	for _, c := range w.frameChunks(batch) {
+		if err := w.pace(len(c.data)); err != nil {
 			return err
 		}
-		if err := w.sendChunk(blob[off:end]); err != nil {
+		if err := w.sendChunk(c); err != nil {
 			return err
 		}
 	}
@@ -1105,6 +1141,51 @@ func (w *cupsWS) sendBatch(batch [][]byte) error {
 	w.stats.bytesSent.Add(uint64(totalRaw))
 	w.stats.batchesSent.Add(1)
 	return nil
+}
+
+// cupsChunk is one message's worth of packets. cont says the message starts in
+// the middle of a packet, which only happens when one packet is bigger than a
+// message on its own.
+type cupsChunk struct {
+	data []byte
+	cont bool
+}
+
+// frameChunks cuts a batch into messages of at most MaxMessageData bytes. A cut
+// falls between packets whenever it can, because that is what lets the far side
+// pick the stream up again after a message is lost.
+func (w *cupsWS) frameChunks(batch [][]byte) []cupsChunk {
+	limit := max(w.config.MaxMessageData, 2)
+	var chunks []cupsChunk
+	var cur []byte
+	cont := false // the message being built starts inside a packet
+	emit := func() {
+		if len(cur) == 0 {
+			return
+		}
+		chunks = append(chunks, cupsChunk{data: cur, cont: cont})
+		cur, cont = nil, false
+	}
+	for _, pkt := range batch {
+		var hdr [2]byte
+		binary.BigEndian.PutUint16(hdr[:], uint16(len(pkt)))
+		body := make([]byte, 0, 2+len(pkt))
+		body = append(body, hdr[:]...)
+		body = append(body, pkt...)
+		for len(body) > 0 {
+			take := min(limit-len(cur), len(body))
+			cur = append(cur, body[:take]...)
+			body = body[take:]
+			if len(body) > 0 {
+				// What is left of this packet opens the next message, so that
+				// message starts inside a packet.
+				emit()
+				cont = true
+			}
+		}
+	}
+	emit()
+	return chunks
 }
 
 // pace waits out the AIMD interval for a message of size bytes: 1/rate, or
@@ -1124,7 +1205,9 @@ func (w *cupsWS) pace(size int) error {
 	if interval < w.config.SendInterval {
 		interval = w.config.SendInterval
 	}
-	if hold := time.Until(w.rateHold); hold > 0 {
+	// The hold is capped: it is there to let the relay's budget refill, not to
+	// stall the acks for longer than the stripe layer's RTO.
+	if hold := min(time.Until(w.rateHold), cupsHoldMax); hold > 0 {
 		if !sleepCtx(w.ctx, hold) {
 			return errStopped
 		}
@@ -1139,30 +1222,59 @@ func (w *cupsWS) pace(size int) error {
 }
 
 // adaptRate is the AIMD step on the write path: a new 429 cuts the rate and
-// holds writes for RateHold, a clean second grows it towards RateMax. The relay
-// never says what the budget is, so it is found, not guessed.
+// holds writes for RateHold, a clean second grows it again - but only up to a
+// ceiling a refusal has already lowered, so the rate settles just under the
+// relay's budget instead of climbing back into the same 429. The relay never
+// says what that budget is, so it is found, then remembered.
 func (w *cupsWS) adaptRate(now time.Time) {
+	if w.rateCeil <= 0 {
+		w.rateCeil = w.config.RateMax
+	}
 	refused := w.stats.writeRefused.Load()
 	if refused > w.rateSeen {
 		w.rateSeen = refused
+		// One storm is one cut: a burst of 429s inside the hold is the same
+		// answer to the same mistake, and cutting per frame took 100/s down to
+		// 23/s on the stand and left the tunnel there for half a minute.
+		if now.Before(w.rateHold) {
+			return
+		}
 		if !w.rateSuspect {
 			w.rateCutFrom = w.rate
 			w.rateSuspect = true
 		}
+		if c := w.rate * cupsCeilMargin; c < w.rateCeil {
+			w.rateCeil = max(c, w.config.RateMin)
+		}
+		// The probe clock starts now: a ceiling this fresh is not probed again
+		// at once, or the rate would climb straight back into the same 429.
+		w.rateProbeAt = now
 		w.rate = max(w.rate*w.config.RateCut, w.config.RateMin)
 		w.ratePub.Store(math.Float64bits(w.rate))
 		w.rateHold = now.Add(w.config.RateHold)
 		w.rateAt = now
 		if now.Sub(w.rateLogAt) > time.Second {
 			w.rateLogAt = now
-			utils.Infof("[CUPS] rate -> %.0f/s (429, refused %d)", w.rate, refused)
+			utils.Infof("[CUPS] rate -> %.0f/s (429, refused %d, ceiling %.0f/s)", w.rate, refused, w.rateCeil)
 		}
 		return
 	}
-	if now.Sub(w.rateAt) < time.Second || w.rate >= w.config.RateMax {
+	if now.Sub(w.rateAt) < time.Second {
 		return
 	}
-	w.rate = min(w.rate*w.config.RateGrow, w.config.RateMax)
+	if w.rate >= w.rateCeil {
+		// The ceiling came from a refusal, and the relay's budget moves with
+		// how busy the rooms are, so it is probed again - slowly - instead of
+		// being treated as permanent.
+		w.rateSuspect = false
+		if now.Sub(w.rateProbeAt) >= cupsCeilProbe {
+			w.rateProbeAt = now
+			w.rateCeil = min(w.rateCeil*cupsCeilProbeStep, w.config.RateMax)
+			utils.Infof("[CUPS] ceiling -> %.0f/s (probe)", w.rateCeil)
+		}
+		return
+	}
+	w.rate = min(w.rate*w.config.RateGrow, w.rateCeil)
 	w.rateAt = now
 	w.ratePub.Store(math.Float64bits(w.rate))
 	if w.rateSuspect && w.rate >= w.rateCutFrom {
@@ -1171,13 +1283,29 @@ func (w *cupsWS) adaptRate(now time.Time) {
 	}
 }
 
-// sendChunk sends one message: a 2-byte length of the chunk, then the chunk,
-// packed into cursor integers. The length lets the peer strip the zero
-// padding exactly before stitching the byte stream back.
-func (w *cupsWS) sendChunk(chunk []byte) error {
-	payload := make([]byte, 2+len(chunk))
-	binary.BigEndian.PutUint16(payload[:2], uint16(len(chunk)))
-	copy(payload[2:], chunk)
+const (
+	// cupsCeilMargin is how far under the rate that was just refused the new
+	// ceiling sits: the relay refuses at that rate, so the budget is below it.
+	cupsCeilMargin = 0.9
+	// cupsCeilProbe/cupsCeilProbeStep move a refusal-set ceiling up again, so a
+	// room that got empty does not keep the tunnel slow forever.
+	cupsCeilProbe     = 20 * time.Second
+	cupsCeilProbeStep = 1.1
+)
+
+// sendChunk sends one message: the frame header, then the chunk, packed into
+// cursor integers. The header carries the body length, so the peer strips the
+// zero padding exactly, and the sequence number, so the peer can tell a message
+// that was lost from an ordered one.
+func (w *cupsWS) sendChunk(c cupsChunk) error {
+	payload := make([]byte, cupsFrameHeader+len(c.data))
+	payload[0], payload[1] = cupsFrameMagic[0], cupsFrameMagic[1]
+	binary.BigEndian.PutUint32(payload[2:6], w.txSeq.Add(1))
+	if c.cont {
+		payload[6] = cupsFrameCont
+	}
+	binary.BigEndian.PutUint16(payload[7:9], uint16(len(c.data)))
+	copy(payload[cupsFrameHeader:], c.data)
 
 	msg := map[string]interface{}{
 		"rpc": map[string]interface{}{
@@ -1336,54 +1464,125 @@ func (w *cupsWS) handleReply(raw []byte) {
 		nums = append(nums, row, col)
 	}
 	decoded := bytesFromNumbers(nums)
-	// Strip the padding: the first two bytes are how many real bytes follow.
-	if len(decoded) < 2 {
+	seq, cont, body, framed := unpackFrame(decoded)
+	if w.recvStreams == nil {
+		w.recvStreams = make(map[string]*cupsStream)
+	}
+	st := w.recvStreams[sender]
+	if st == nil {
+		st = &cupsStream{}
+		w.recvStreams[sender] = st
+	}
+	if !framed {
+		// A peer build that predates the sequence numbers: it still cuts
+		// packets across messages, so read it the old way, in order and blind.
+		if !w.legacyWarned {
+			w.legacyWarned = true
+			utils.Infof("[CUPS] peer %s sends unframed messages: it runs an older build", shortRoom(w.room()))
+		}
+		if len(body) < 2 {
+			return
+		}
+		n := int(binary.BigEndian.Uint16(body[:2]))
+		if 2+n > len(body) {
+			return
+		}
+		st.buf = append(st.buf, body[2:2+n]...)
+	} else if st.accept(seq, cont) {
+		st.buf = append(st.buf, body...)
+	} else {
 		return
 	}
-	dataLen := int(binary.BigEndian.Uint16(decoded[:2]))
-	if 2+dataLen > len(decoded) {
-		return
-	}
-	chunk := decoded[2 : 2+dataLen]
+	w.deliver(st)
+}
 
-	// Append to the running stream and pull out whole packets; a packet split
-	// across messages completes once the rest of it arrives.
-	if w.recvBufs == nil {
-		w.recvBufs = make(map[string][]byte)
+// unpackFrame reads one message: its sequence number, whether it starts inside a
+// packet, and the body. ok is false for a message with no frame header at all,
+// which is what a build older than this one sends.
+func unpackFrame(b []byte) (seq uint32, cont bool, body []byte, ok bool) {
+	if len(b) < cupsFrameHeader || b[0] != cupsFrameMagic[0] || b[1] != cupsFrameMagic[1] {
+		return 0, false, b, false
 	}
-	buf := append(w.recvBufs[sender], chunk...)
+	n := int(binary.BigEndian.Uint16(b[7:9]))
+	if cupsFrameHeader+n > len(b) {
+		return 0, false, nil, false
+	}
+	return binary.BigEndian.Uint32(b[2:6]), b[6]&cupsFrameCont != 0, b[cupsFrameHeader : cupsFrameHeader+n], true
+}
+
+// cupsStream is one peer's byte stream on this channel: what is left of a packet
+// cut across messages, and the last sequence number seen.
+type cupsStream struct {
+	seq uint32
+	buf []byte
+}
+
+// cupsRestartGap is how far behind the last sequence number a message has to be
+// before it reads as "the far side restarted and counts from one again" instead
+// of as an old duplicate.
+const cupsRestartGap = 64
+
+// accept says whether this message continues the stream, and drops the held
+// bytes when it does not: after a hole nothing in the buffer lines up anymore.
+func (s *cupsStream) accept(seq uint32, cont bool) bool {
+	switch {
+	case s.seq == 0: // the first message of this stream
+		s.buf = s.buf[:0]
+	case seq == s.seq+1: // in order
+		if !cont {
+			s.buf = s.buf[:0] // a packet boundary: nothing carries over
+		}
+	case seq == s.seq, seq < s.seq && seq != 1 && s.seq-seq <= cupsRestartGap:
+		return false // a duplicate: the stream is already past it
+	default:
+		// seq > s.seq+1: a message never arrived, because the relay answered
+		// that write with an error. seq < s.seq: the far side restarted. Either
+		// way what the buffer holds no longer lines up, and only a message that
+		// starts at a packet boundary can put the stream back in step. The
+		// packets in the hole are gone, which is exactly what a link loss looks
+		// like: the stripe layer retransmits them.
+		if cont {
+			return false
+		}
+		s.buf = s.buf[:0]
+	}
+	s.seq = seq
+	return true
+}
+
+// deliver pulls the whole packets out of the stream and hands them on, keeping
+// the tail of a packet that is still in flight.
+func (w *cupsWS) deliver(st *cupsStream) {
 	adv, count, total := 0, 0, 0
-	for len(buf)-adv >= 2 {
-		ln := int(binary.BigEndian.Uint16(buf[adv : adv+2]))
+	for len(st.buf)-adv >= 2 {
+		ln := int(binary.BigEndian.Uint16(st.buf[adv : adv+2]))
 		if ln == 0 {
-			// Not a real length - the stream is out of sync; drop it.
-			adv = len(buf)
+			// Not a real length: nothing after this can be parsed.
+			adv = len(st.buf)
 			break
 		}
-		if len(buf)-adv < 2+ln {
+		if len(st.buf)-adv < 2+ln {
 			break // rest of this packet hasn't arrived yet
 		}
-		pkt := buf[adv+2 : adv+2+ln]
 		if w.onData != nil {
-			w.onData(pkt)
+			w.onData(st.buf[adv+2 : adv+2+ln])
 		}
 		adv += 2 + ln
 		count++
 		total += ln
 	}
 	// Keep only the unconsumed tail. onData ran already, so moving the bytes
-	// now can't disturb a packet still in flight. A member with nothing
-	// pending holds no buffer, so members who left cost nothing.
-	rest := append(buf[:0], buf[adv:]...)
+	// now can't disturb a packet still in flight.
+	rest := append(st.buf[:0], st.buf[adv:]...)
 	switch {
 	case len(rest) == 0:
-		delete(w.recvBufs, sender)
+		st.buf = nil
 	case len(rest) > w.config.MaxPayloadBytes+w.config.MaxMessageData:
 		// A stream that never yields a packet must not grow without bound.
 		utils.Debugf("[CUPS] recv stream out of sync (%s), resetting", w.room())
-		delete(w.recvBufs, sender)
+		st.buf = nil
 	default:
-		w.recvBufs[sender] = rest
+		st.buf = rest
 	}
 	if count > 0 {
 		w.stats.packetsRecv.Add(uint64(count))

@@ -63,6 +63,55 @@ func TestWritePacerRespectsTheByteRate(t *testing.T) {
 	}
 }
 
+// A storm of 429s is one cut, not one per refused frame: cutting per frame took
+// 100/s down to 23/s on the stand and kept the tunnel there for half a minute.
+func TestPacerCutsOncePerStorm(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultCupsonlineConfig()
+	cfg.RateStart, cfg.RateMin, cfg.RateMax = 100, 5, 200
+	cfg.RateGrow, cfg.RateCut, cfg.RateHold = 1.05, 0.5, time.Second
+	cfg.RateBytes, cfg.SendInterval = 0, 0
+
+	w := &cupsWS{config: cfg, ctx: context.Background(), stats: &channelStats{}, rate: cfg.RateStart}
+	for i := 0; i < 6; i++ {
+		w.stats.writeRefused.Add(1)
+		w.adaptRate(time.Now())
+	}
+	if w.rate != 50 {
+		t.Fatalf("rate after a six-frame storm = %v, want one cut to 50", w.rate)
+	}
+}
+
+// The rate settles under the budget a refusal proved too high instead of
+// climbing back into it: that saw is what turned one 429 into a minute of
+// collapse on the stand.
+func TestPacerSettlesBelowTheRefusedRate(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultCupsonlineConfig()
+	cfg.RateStart, cfg.RateMin, cfg.RateMax = 100, 5, 200
+	cfg.RateGrow, cfg.RateCut, cfg.RateHold = 2, 0.5, time.Millisecond
+	cfg.RateBytes, cfg.SendInterval = 0, 0
+
+	w := &cupsWS{config: cfg, ctx: context.Background(), stats: &channelStats{}, rate: cfg.RateStart}
+	w.stats.writeRefused.Add(1)
+	w.adaptRate(time.Now())
+	ceil := w.rateCeil
+	if ceil >= cfg.RateStart {
+		t.Fatalf("ceiling after a refusal at %v = %v, want it lowered", cfg.RateStart, ceil)
+	}
+
+	for i := 0; i < 20; i++ {
+		w.rateAt = time.Now().Add(-2 * time.Second) // a clean second every time
+		w.adaptRate(time.Now())
+	}
+	if w.rate > ceil {
+		t.Fatalf("rate = %v after a minute of clean seconds, want it held at the %v ceiling", w.rate, ceil)
+	}
+	if w.rate < ceil*0.99 {
+		t.Fatalf("rate = %v, want it to fill the %v ceiling", w.rate, ceil)
+	}
+}
+
 // A refused write is queued, not dropped: Send only fails when the transport is
 // stopped, so the pacer has something to slow down instead of losing data.
 func TestSendQueuesInsteadOfDropping(t *testing.T) {
