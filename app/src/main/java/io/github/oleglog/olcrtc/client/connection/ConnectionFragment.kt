@@ -2,6 +2,7 @@ package io.github.oleglog.olcrtc.client.connection
 
 import android.app.Activity
 import android.content.res.ColorStateList
+import android.graphics.Color
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.ConnectivityManager
