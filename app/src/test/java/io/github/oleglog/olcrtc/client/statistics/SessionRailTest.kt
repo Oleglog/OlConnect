@@ -115,6 +115,7 @@ class SessionRailTest {
         val codes = RailCode.entries
         assertEquals(codes, RailCode.parse(codes.joinToString("") { it.letter.toString() }))
         assertEquals(RailCode.NONE, RailCode.parse('?'))
-        assertEquals(RailCode.NONE, RailCode.parse(null as String?))
+        assertEquals(emptyList<RailCode>(), RailCode.parse(null as String?))
+        assertEquals(emptyList<RailCode>(), RailCode.parse(""))
     }
 }
