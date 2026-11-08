@@ -587,6 +587,10 @@ type channelStats struct {
 	batchesRecv atomic.Uint64
 	reconnects  atomic.Uint64
 	dropped     atomic.Uint64
+	// writeRefused counts writes the relay answered with an error (rate limit,
+	// refused payload). It closes no socket and logs nothing, so this counter
+	// is the only sign of it.
+	writeRefused atomic.Uint64
 }
 
 // ---- WS ----
@@ -643,6 +647,9 @@ type cupsWS struct {
 	pongCh  chan struct{}
 
 	stats *channelStats
+
+	// refuseLogAt throttles the refusal line; the read goroutine owns it.
+	refuseLogAt time.Time
 }
 
 func (w *cupsWS) nextID() int64 { return w.rpcID.Add(1) }
@@ -1179,6 +1186,19 @@ func (w *cupsWS) handleReply(raw []byte) {
 	}
 	var obj map[string]interface{}
 	if err := json.Unmarshal(raw, &obj); err != nil {
+		return
+	}
+	if errObj, ok := obj["error"].(map[string]interface{}); ok {
+		// The relay answered one of our writes with an error. It does not close
+		// the socket and writes nothing to the log, so this is the only place
+		// the refusal is visible at all - and it is the reason a write can be
+		// "sent" and never arrive.
+		w.stats.writeRefused.Add(1)
+		if now := time.Now(); now.Sub(w.refuseLogAt) > time.Second {
+			w.refuseLogAt = now
+			utils.Infof("[CUPS] write refused (%s, total %d): %v",
+				w.room(), w.stats.writeRefused.Load(), errObj)
+		}
 		return
 	}
 	push, ok := obj["push"].(map[string]interface{})
@@ -1856,19 +1876,30 @@ func (t *CupsonlineTransport) statsLoop() {
 			lastTotalBytesSent = totalBytesSent
 			lastTotalBytesRecv = totalBytesRecv
 
-			utils.Debugf("[CUPS-TOTAL] tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  uptime=%v",
+			utils.Debugf("[CUPS-TOTAL] tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  refused=%d  uptime=%v",
 				dtS/uint64(t.config.StatsInterval.Seconds()),
 				float64(dtBS)/t.config.StatsInterval.Seconds()/1024,
 				dtR/uint64(t.config.StatsInterval.Seconds()),
 				float64(dtBR)/t.config.StatsInterval.Seconds()/1024,
+				t.WriteRefusals(),
 				time.Since(t.statsStart).Round(time.Second),
 			)
 		}
 	}
 }
 
-func (t *CupsonlineTransport) RoomUUIDs() []string {
-	out := make([]string, 0, len(t.wss))
+// WriteRefusals is how many writes the relay answered with an error, added up
+// over the rooms. It closes no socket and writes nothing itself: without this
+// counter a refused write looks exactly like a lost one.
+func (t *CupsonlineTransport) WriteRefusals() uint64 {
+	var n uint64
+	for _, ws := range t.wss {
+		n += ws.stats.writeRefused.Load()
+	}
+	return n
+}
+
+func (t *CupsonlineTransport) RoomUUIDs() []string {	out := make([]string, 0, len(t.wss))
 	for _, ws := range t.wss {
 		out = append(out, ws.room())
 	}
