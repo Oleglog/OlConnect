@@ -20,6 +20,22 @@ func NewCompressedTransport(inner Transport) Transport {
 	return &CompressedTransport{Transport: inner}
 }
 
+// PreferredBatchBytes and PreferredBatchLingerMs keep a carrier hint alive when
+// the legacy LZ4 codec wraps an encrypted carrier.
+func (c *CompressedTransport) PreferredBatchBytes() int {
+	if hinter, ok := c.Transport.(BatchSizeHinter); ok {
+		return hinter.PreferredBatchBytes()
+	}
+	return 0
+}
+
+func (c *CompressedTransport) PreferredBatchLingerMs() int {
+	if hinter, ok := c.Transport.(BatchLingerHinter); ok {
+		return hinter.PreferredBatchLingerMs()
+	}
+	return 0
+}
+
 func (c *CompressedTransport) Send(data []byte) error {
 	compressed := compress(data)
 	return c.Transport.Send(compressed)

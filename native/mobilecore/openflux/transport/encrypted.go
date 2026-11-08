@@ -43,6 +43,26 @@ type EncryptedTransport struct {
 	seenOrder     []string
 }
 
+// PreferredBatchBytes keeps an optional carrier hint alive through the wrapper.
+// Boards only ever runs with an encryption key, so a hint swallowed here turns
+// every board object into an 8 KiB sliver: the pacer then counts events instead
+// of bytes and throughput collapses to ~20 KB/s while the board is never even
+// close to rate limiting.
+func (e *EncryptedTransport) PreferredBatchBytes() int {
+	if hinter, ok := e.Transport.(BatchSizeHinter); ok {
+		return hinter.PreferredBatchBytes()
+	}
+	return 0
+}
+
+// PreferredBatchLingerMs is the linger half of the same hint.
+func (e *EncryptedTransport) PreferredBatchLingerMs() int {
+	if hinter, ok := e.Transport.(BatchLingerHinter); ok {
+		return hinter.PreferredBatchLingerMs()
+	}
+	return 0
+}
+
 // NewEncryptedTransport wraps inner with a directional AES-256-GCM stream.
 // Both peers must be configured with the same secret and context, and
 // exactly one of them must set exitNode=true so the two sides pick opposite
