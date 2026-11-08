@@ -3,7 +3,7 @@
          the overlay styles keep their names because the appearance settings are
          a user feature (Bronze/Black/Mono palettes and the five accents). -->
     <style name="Theme.OlcrtcClient" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
         <item name="colorPrimary">@color/olcrtc_accent</item>
         <item name="colorOnPrimary">@color/olcrtc_accent_ink</item>
         <item name="colorPrimaryContainer">@color/olcrtc_primary_container</item>
@@ -198,9 +198,13 @@
     </style>
 
     <!-- Type scale: Screen 26/700, Title 20/700, Panel 14/700, Body 14/400,
-         Caption 12/400, Service 11/500, numbers in mono with tabular figures. -->
+         Caption 12/400, Service 11/500, numbers in mono with tabular figures.
+         Manrope ships as one variable file: the weight axis is addressed with
+         textFontWeight (API 28+); on 26-27 the base weight shows, which is the
+         agreed trade-off. JetBrains Mono is used for numbers only. -->
     <style name="TextAppearance.Olcrtc.Screen" parent="TextAppearance.Material3.HeadlineSmall">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">26sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:letterSpacing">-0.01</item>
@@ -208,76 +212,84 @@
     </style>
 
     <style name="TextAppearance.Olcrtc.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">20sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:letterSpacing">-0.01</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.TitleMedium" parent="TextAppearance.Material3.TitleMedium">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">14sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:letterSpacing">0</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.TitleSmall" parent="TextAppearance.Material3.TitleSmall">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">13sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:letterSpacing">0</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.Body" parent="TextAppearance.Material3.BodyMedium">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">400</item>
         <item name="android:textSize">14sp</item>
         <item name="android:textStyle">normal</item>
         <item name="android:lineSpacingMultiplier">1.5</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.Caption" parent="TextAppearance.Material3.BodySmall">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">400</item>
         <item name="android:textSize">12sp</item>
         <item name="android:textStyle">normal</item>
         <item name="android:lineSpacingMultiplier">1.4</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.LabelStrong" parent="TextAppearance.Material3.LabelLarge">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">13sp</item>
         <item name="android:textStyle">bold</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.Label" parent="TextAppearance.Material3.LabelMedium">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">500</item>
         <item name="android:textSize">12sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textStyle">normal</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.Service" parent="TextAppearance.Material3.LabelSmall">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">500</item>
         <item name="android:textSize">11sp</item>
         <item name="android:textStyle">normal</item>
     </style>
 
     <!-- Numbers: mono with tabular figures, so columns do not jump. -->
     <style name="TextAppearance.Olcrtc.Num" parent="TextAppearance.Material3.LabelLarge">
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono_medium</item>
         <item name="android:textSize">13sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textStyle">normal</item>
         <item name="android:fontFeatureSettings">tnum</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.NumBig" parent="TextAppearance.Material3.HeadlineMedium">
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono_bold</item>
         <item name="android:textSize">26sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textStyle">normal</item>
         <item name="android:letterSpacing">-0.02</item>
         <item name="android:fontFeatureSettings">tnum</item>
     </style>
 
     <style name="TextAppearance.Olcrtc.NumSmall" parent="TextAppearance.Material3.LabelMedium">
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono_regular</item>
         <item name="android:textSize">12sp</item>
         <item name="android:textStyle">normal</item>
         <item name="android:fontFeatureSettings">tnum</item>
@@ -285,7 +297,8 @@
 
     <!-- The wordmark: identity only, the accent marks the product name. -->
     <style name="TextAppearance.Olcrtc.Wordmark" parent="TextAppearance.Material3.HeadlineSmall">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">20sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:letterSpacing">-0.01</item>
@@ -297,7 +310,8 @@
 
     <!-- The status vocabulary: a word with a 2 px rule, never a bare dot. -->
     <style name="TextAppearance.Olcrtc.State" parent="TextAppearance.Olcrtc.TitleMedium">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">14sp</item>
         <item name="android:textStyle">bold</item>
     </style>
@@ -358,7 +372,7 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginTop">2dp</item>
         <item name="android:duplicateParentState">true</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/manrope_variable</item>
         <item name="android:gravity">center</item>
         <item name="android:importantForAccessibility">no</item>
         <item name="android:includeFontPadding">false</item>
